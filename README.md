@@ -173,3 +173,16 @@ Please cite the published SMART-PET article described in `CITATION.cff`. The pap
 ## License
 
 SMART-PET is licensed under **CC BY-NC-SA 4.0**. Commercial use is prohibited. See `LICENSE`.
+
+## Reproducibility assets
+
+The pretrained inference checkpoint, exact MNI preprocessing reference, fixed
+whole-brain evaluation mask, SHA-256 manifest, and third-party notices are
+available in the
+[SMART-PET v0.3.0 reproducibility assets folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
+
+Access is currently restricted to authorized reviewers. The repository does
+not automatically download these files. Verify all downloaded files against
+the included `SHA256SUMS.txt` before use.
+
+See [Reproducibility assets](docs/REPRODUCIBILITY.md) for the complete contract.

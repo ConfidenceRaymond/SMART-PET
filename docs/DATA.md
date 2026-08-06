@@ -15,3 +15,12 @@ normalized = asinh(max(SUV, 0) / asinh_scale)
 Use `smartpet-validate-manifest` on both splits before allocating a GPU. Training and validation subject IDs must be patient-disjoint; the CLI validates each manifest internally, while split-level overlap must also be checked during dataset preparation.
 
 The repository deliberately excludes patient data, institution-specific manifests, raw-list-mode processing, and registration pipelines.
+
+## Reference resources
+
+The exact MNI reference and whole-brain evaluation mask used by the baseline
+are available in the
+[controlled reproducibility asset folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
+
+These files are third-party template resources. Their original notices and
+SHA-256 hashes accompany the download.
