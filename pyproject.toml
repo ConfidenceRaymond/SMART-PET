@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartpet"
+version = "0.3.0"
+description = "Production-grade 3D SMART-PET training, fine-tuning, evaluation, and whole-volume inference"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Raymond Confidence"}]
+license = {text = "CC BY-NC-SA 4.0"}
+keywords = ["PET", "medical imaging", "deep learning", "GAN", "denoising"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+  "numpy>=1.24",
+  "nibabel>=5.1",
+  "pandas>=2.0",
+  "torch>=2.2",
+  "tqdm>=4.66",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "build>=1.2"]
+paper-metrics = ["torchvision>=0.17"]
+
+[project.scripts]
+smartpet-train = "smartpet.cli.train:main"
+smartpet-infer = "smartpet.cli.infer:main"
+smartpet-infer-batch = "smartpet.cli.infer_batch:main"
+smartpet-evaluate = "smartpet.cli.evaluate:main"
+smartpet-validate-manifest = "smartpet.cli.validate_manifest:main"
+smartpet-audit-checkpoint = "smartpet.cli.audit_checkpoint:main"
+smartpet-audit-inference = "smartpet.cli.audit_inference:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+cache_dir = "work/cache/pytest"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["work", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

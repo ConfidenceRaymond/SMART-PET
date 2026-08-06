@@ -1,0 +1,3 @@
+subject_id,source_path,target_path
+train-001,/data/train-001_lowdose_normalized.nii.gz,/data/train-001_standard_normalized.nii.gz
+train-002,/data/train-002_lowdose_normalized.nii.gz,/data/train-002_standard_normalized.nii.gz

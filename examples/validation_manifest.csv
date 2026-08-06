@@ -1,0 +1,3 @@
+subject_id,source_path,target_path
+val-001,/data/val-001_lowdose_normalized.nii.gz,/data/val-001_standard_normalized.nii.gz
+val-002,/data/val-002_lowdose_normalized.nii.gz,/data/val-002_standard_normalized.nii.gz

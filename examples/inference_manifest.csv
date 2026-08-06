@@ -1,0 +1,3 @@
+subject_id,input_path,normalized_output,suv_output
+case-001,/data/case-001_lowdose_suv.nii.gz,/outputs/case-001_prediction_normalized.nii.gz,/outputs/case-001_prediction_suv.nii.gz
+case-002,/data/case-002_lowdose_suv.nii.gz,,/outputs/case-002_prediction_suv.nii.gz
