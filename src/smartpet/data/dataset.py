@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,23 +23,47 @@ class PairRecord:
 
 
 def read_manifest(path: str | Path) -> list[PairRecord]:
-    frame = pd.read_csv(path)
+    path = Path(path)
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[])
     missing = [name for name in REQUIRED_COLUMNS if name not in frame.columns]
     if missing:
-        raise ValueError(f"Manifest missing columns: {missing}")
+        raise ValueError(f"Manifest {path} missing columns: {missing}")
     if frame.empty:
-        raise ValueError("Manifest is empty")
-    records = []
-    for row in frame.itertuples(index=False):
-        records.append(
-            PairRecord(
-                str(row.subject_id),
-                Path(row.source_path),
-                Path(row.target_path),
+        raise ValueError(f"Manifest {path} is empty")
+
+    manifest_dir = path.resolve().parent
+    records: list[PairRecord] = []
+    for line, row in enumerate(frame.itertuples(index=False), start=2):
+        subject_id = str(row.subject_id).strip()
+        if not subject_id:
+            raise ValueError(f"{path}:{line} has an empty subject_id")
+
+        resolved_paths: dict[str, Path] = {}
+        for field in ("source_path", "target_path"):
+            text = str(getattr(row, field)).strip()
+            if not text:
+                raise ValueError(f"{path}:{line} ({subject_id}) has an empty {field}")
+            candidate = Path(text)
+            if not candidate.is_absolute():
+                candidate = manifest_dir / candidate
+            resolved_paths[field] = candidate.resolve()
+
+        source_path = resolved_paths["source_path"]
+        target_path = resolved_paths["target_path"]
+        if source_path == target_path:
+            raise ValueError(
+                f"{path}:{line} ({subject_id}): source and target are the same file; "
+                "this would train the identity map"
             )
-        )
-    if len({r.subject_id for r in records}) != len(records):
-        raise ValueError("subject_id must be unique within each split manifest")
+        records.append(PairRecord(subject_id, source_path, target_path))
+
+    duplicates = sorted(
+        subject_id
+        for subject_id, count in Counter(record.subject_id for record in records).items()
+        if count > 1
+    )
+    if duplicates:
+        raise ValueError(f"{path}: duplicate subject_id values: {duplicates[:10]}")
     return records
 
 

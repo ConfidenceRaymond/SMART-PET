@@ -22,6 +22,16 @@ torchrun --standalone --nproc-per-node=2 -m smartpet.cli.train \
 
 `batch_size` is per rank. The run records per-rank and global batch sizes, successful optimizer updates, subject exposures, manifests, reference hashes, precision, and model configuration.
 
+DDP initialization uses a 30-minute collective timeout by default. Set
+`SMARTPET_DIST_TIMEOUT_MIN` to a positive integer to use a site-specific limit.
+Validation must contain at least one subject per rank; training stops before the
+first validation collective when the split is smaller than the DDP world size.
+
+With fp16, a GradScaler overflow skips both GAN optimizers together and does not
+advance `global_step`. Each epoch records `fp16_scaler_skipped_batches` and the
+final scaler value. The run stops after `max_consecutive_scaler_skips`
+consecutive skipped batches because sustained overflow indicates divergence.
+
 ## Exact continuation
 
 ```bash

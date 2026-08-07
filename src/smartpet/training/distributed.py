@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -39,9 +40,13 @@ def setup(backend: str) -> Runtime:
         device = torch.device("cuda", local_rank) if use_cuda else torch.device("cpu")
         if use_cuda:
             torch.cuda.set_device(local_rank)
+        timeout_minutes = int(os.environ.get("SMARTPET_DIST_TIMEOUT_MIN", "30"))
+        if timeout_minutes <= 0:
+            raise ValueError("SMARTPET_DIST_TIMEOUT_MIN must be a positive integer")
         init_kwargs = {
             "backend": "nccl" if use_cuda else "gloo",
             "init_method": "env://",
+            "timeout": timedelta(minutes=timeout_minutes),
         }
         if use_cuda:
             try:
@@ -79,6 +84,56 @@ def barrier(runtime: Runtime) -> None:
 def cleanup(runtime: Runtime) -> None:
     if runtime.distributed and dist.is_initialized():
         dist.destroy_process_group()
+
+
+def all_ranks_true(runtime: Runtime, local_value: bool) -> bool:
+    """Return ``True`` only when every distributed rank reports ``True``."""
+
+    if not runtime.distributed:
+        return bool(local_value)
+    flag = torch.tensor(
+        [1 if local_value else 0],
+        device=runtime.device,
+        dtype=torch.int32,
+    )
+    dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+    return bool(flag.item())
+
+
+def fail_collectively(runtime: Runtime, local_ok: bool, message: str) -> None:
+    """Raise on every rank when one or more ranks report a local failure."""
+
+    if not runtime.distributed:
+        if not local_ok:
+            raise RuntimeError(message)
+        return
+
+    flag = torch.tensor(
+        [0 if local_ok else 1],
+        device=runtime.device,
+        dtype=torch.int32,
+    )
+    dist.all_reduce(flag, op=dist.ReduceOp.SUM)
+    failures = int(flag.item())
+    if failures == 0:
+        return
+
+    local_message = None if local_ok else f"rank {runtime.rank}: {message}"
+    gathered: list[str | None] = [None] * runtime.world_size
+    dist.all_gather_object(gathered, local_message)
+    details = "; ".join(item for item in gathered if item)
+    raise RuntimeError(f"Collective abort ({failures} rank(s)): {details}")
+
+
+def validate_eval_partition(dataset_size: int, runtime: Runtime) -> None:
+    """Require at least one validation sample on every distributed rank."""
+
+    if runtime.distributed and int(dataset_size) < runtime.world_size:
+        raise ValueError(
+            f"Validation manifest has {dataset_size} subjects but world_size is "
+            f"{runtime.world_size}. Every rank must receive at least one validation "
+            "subject. Reduce the DDP world size or enlarge the validation split."
+        )
 
 
 class DistributedEvalSampler(Sampler[int]):

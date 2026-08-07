@@ -81,16 +81,15 @@ def autocast_context(
 
 def optimizer_max_step(optimizer_or_state: torch.optim.Optimizer | dict[str, object]) -> int:
     if isinstance(optimizer_or_state, torch.optim.Optimizer):
-        state_dict = optimizer_or_state.state_dict()
+        raw_state = optimizer_or_state.state.values()
     else:
-        state_dict = optimizer_or_state
+        state = optimizer_or_state.get("state", {})
+        if not isinstance(state, dict):
+            return 0
+        raw_state = state.values()
 
     steps: list[int] = []
-    raw_state = state_dict.get("state", {})
-    if not isinstance(raw_state, dict):
-        return 0
-
-    for parameter_state in raw_state.values():
+    for parameter_state in raw_state:
         if not isinstance(parameter_state, dict) or "step" not in parameter_state:
             continue
         value = parameter_state["step"]

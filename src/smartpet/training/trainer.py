@@ -34,10 +34,13 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .distributed import (
     DistributedEvalSampler,
     Runtime,
+    all_ranks_true,
     barrier,
     cleanup,
+    fail_collectively,
     setup,
     unwrap,
+    validate_eval_partition,
     wrap,
 )
 from .precision import (
@@ -68,6 +71,7 @@ class TrainConfig:
     lambda_gan: float = 1.0
     gan_loss: str = "lsgan"
     grad_clip: float = 1.0
+    max_consecutive_scaler_skips: int = 20
     num_workers: int = 4
     val_batches: int = 0
     amp: bool = True
@@ -208,7 +212,8 @@ def _backward_and_prepare_step(
     parameters,
     scaler: torch.amp.GradScaler,
     grad_clip: float,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, bool]:
+    parameter_list = tuple(parameters)
     if scaler.is_enabled():
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -216,15 +221,64 @@ def _backward_and_prepare_step(
         loss.backward()
 
     grad_norm = torch.nn.utils.clip_grad_norm_(
-        parameters,
+        parameter_list,
         grad_clip,
-        error_if_nonfinite=True,
+        error_if_nonfinite=False,
     )
+    finite = bool(torch.isfinite(grad_norm).item())
+    if not scaler.is_enabled() and not finite:
+        raise RuntimeError(
+            "Non-finite gradient without an enabled GradScaler; this is a true "
+            f"training divergence, not a precision skip. grad_norm={grad_norm}"
+        )
+    return grad_norm, finite
+
+
+def _finish_joint_optimizer_step(
+    *,
+    d_optimizer: torch.optim.Optimizer,
+    g_optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    local_finite: bool,
+    runtime: Runtime,
+) -> bool:
+    """Apply both GAN optimizer updates or skip both on fp16 overflow."""
+
+    globally_finite = all_ranks_true(runtime, local_finite)
     if scaler.is_enabled():
-        scaler.step(optimizer)
-    else:
-        optimizer.step()
-    return grad_norm
+        if globally_finite:
+            scaler.step(d_optimizer)
+            scaler.step(g_optimizer)
+            scaler.update()
+        else:
+            new_scale = scaler.get_scale() * scaler.get_backoff_factor()
+            scaler.update(new_scale=new_scale)
+        return globally_finite
+
+    fail_collectively(
+        runtime,
+        local_finite,
+        "Non-finite training gradient without an enabled GradScaler",
+    )
+    d_optimizer.step()
+    g_optimizer.step()
+    return True
+
+
+def _record_scaler_skip(
+    consecutive: int,
+    total: int,
+    *,
+    maximum: int,
+) -> tuple[int, int]:
+    consecutive += 1
+    total += 1
+    if consecutive >= maximum:
+        raise RuntimeError(
+            f"GradScaler skipped {consecutive} consecutive GAN updates; the run has "
+            "likely diverged rather than experiencing an isolated fp16 overflow."
+        )
+    return consecutive, total
 
 
 def _append_csv(path: Path, row: dict[str, Any]) -> None:
@@ -272,8 +326,13 @@ def _remove_old_step_checkpoints(directory: Path, keep: int) -> None:
 def _checkpoint_training_state(
     sums: dict[str, float],
     batches: int,
+    scaler_skips: int,
 ) -> dict[str, Any]:
-    return {"epoch_sums": dict(sums), "epoch_batches": int(batches)}
+    return {
+        "epoch_sums": dict(sums),
+        "epoch_batches": int(batches),
+        "epoch_scaler_skips": int(scaler_skips),
+    }
 
 
 def _save_progress_checkpoint(
@@ -297,6 +356,7 @@ def _save_progress_checkpoint(
     precision_payload: dict[str, object],
     training_sums: dict[str, float],
     training_batches: int,
+    training_scaler_skips: int,
     save_named_step: bool,
 ) -> None:
     kwargs = dict(
@@ -316,7 +376,9 @@ def _save_progress_checkpoint(
         config=asdict(config),
         best_metric=best,
         precision=precision_payload,
-        training_state=_checkpoint_training_state(training_sums, training_batches),
+        training_state=_checkpoint_training_state(
+            training_sums, training_batches, training_scaler_skips
+        ),
     )
     checkpoint_dir = out_dir / "checkpoints"
     last_path = checkpoint_dir / "last.pt"
@@ -338,37 +400,57 @@ def _validate(
     generator.eval()
     sums: dict[str, float] = {}
     count = 0.0
-    with torch.no_grad():
-        for index, batch in enumerate(val_loader):
-            if config.val_batches > 0 and index >= config.val_batches:
-                break
-            source = batch["source"].to(runtime.device, non_blocking=True)
-            target = batch["target"].to(runtime.device, non_blocking=True)
-            with autocast_context(precision, runtime.device):
-                prediction = generator(source)
-            prediction = prediction.float()
-            if not torch.isfinite(prediction).all():
-                raise RuntimeError("Validation prediction contains non-finite values")
-            negative = float((prediction < 0).float().mean().item())
-            target_suv = torch.sinh(target.float()) * float(config.asinh_scale)
-            prediction_suv = torch.sinh(prediction) * float(config.asinh_scale)
-            source_suv = torch.sinh(source.float()) * float(config.asinh_scale)
-            if not torch.isfinite(prediction_suv).all():
-                raise RuntimeError("Validation SUV prediction contains non-finite values")
-            pred_metrics = image_quality_metrics(prediction_suv, target_suv)
-            input_metrics = image_quality_metrics(source_suv, target_suv)
-            batch_size = float(source.shape[0])
-            values = {
-                "val_l1_normalized": float(nn.functional.l1_loss(prediction, target).item()),
-                "val_negative_fraction": negative,
-                **{f"val_prediction_{key}_suv": value for key, value in pred_metrics.items()},
-                **{f"val_input_{key}_suv": value for key, value in input_metrics.items()},
-            }
-            for key, value in values.items():
-                sums[key] = sums.get(key, 0.0) + float(value) * batch_size
-            count += batch_size
-    if count <= 0:
-        raise RuntimeError("Validation completed without evaluating a batch")
+    local_error: str | None = None
+    try:
+        with torch.no_grad():
+            for index, batch in enumerate(val_loader):
+                if config.val_batches > 0 and index >= config.val_batches:
+                    break
+                source = batch["source"].to(runtime.device, non_blocking=True)
+                target = batch["target"].to(runtime.device, non_blocking=True)
+                with autocast_context(precision, runtime.device):
+                    prediction = generator(source)
+                prediction = prediction.float()
+                if not torch.isfinite(prediction).all():
+                    local_error = "Validation prediction contains non-finite values"
+                    break
+                negative = float((prediction < 0).float().mean().item())
+                target_suv = torch.sinh(target.float()) * float(config.asinh_scale)
+                prediction_suv = torch.sinh(prediction) * float(config.asinh_scale)
+                source_suv = torch.sinh(source.float()) * float(config.asinh_scale)
+                if not torch.isfinite(prediction_suv).all():
+                    local_error = "Validation SUV prediction contains non-finite values"
+                    break
+                pred_metrics = image_quality_metrics(prediction_suv, target_suv)
+                input_metrics = image_quality_metrics(source_suv, target_suv)
+                batch_size = float(source.shape[0])
+                values = {
+                    "val_l1_normalized": float(
+                        nn.functional.l1_loss(prediction, target).item()
+                    ),
+                    "val_negative_fraction": negative,
+                    **{
+                        f"val_prediction_{key}_suv": value
+                        for key, value in pred_metrics.items()
+                    },
+                    **{
+                        f"val_input_{key}_suv": value
+                        for key, value in input_metrics.items()
+                    },
+                }
+                for key, value in values.items():
+                    sums[key] = sums.get(key, 0.0) + float(value) * batch_size
+                count += batch_size
+    except Exception as error:
+        local_error = f"{type(error).__name__}: {error}"
+
+    if local_error is None and count <= 0:
+        local_error = "Validation completed without evaluating a batch"
+    fail_collectively(
+        runtime,
+        local_error is None,
+        local_error or "Validation failed on another rank",
+    )
     return _reduce_metric_sums(sums, count, runtime)
 
 
@@ -394,6 +476,8 @@ def run(config: TrainConfig) -> Path:
         raise ValueError("loss weights must be non-negative")
     if config.grad_clip <= 0:
         raise ValueError("grad_clip must be positive")
+    if config.max_consecutive_scaler_skips <= 0:
+        raise ValueError("max_consecutive_scaler_skips must be positive")
     if config.val_batches < 0 or config.max_steps < 0 or config.smoke_steps < 0:
         raise ValueError("val_batches and step limits must be non-negative")
     if config.checkpoint_every_steps < 0 or config.keep_step_checkpoints < 0:
@@ -451,6 +535,7 @@ def run(config: TrainConfig) -> Path:
             min_foreground_fraction=0.0,
             foreground_threshold=config.foreground_threshold,
         )
+        validate_eval_partition(len(val_set), runtime)
         train_sampler = DistributedSampler(
             train_set,
             num_replicas=runtime.world_size,
@@ -556,6 +641,8 @@ def run(config: TrainConfig) -> Path:
         best = float("inf")
         resumed_sums: dict[str, float] = {}
         resumed_batches = 0
+        resumed_scaler_skips = 0
+        consecutive_scaler_skips = 0
         if config.resume:
             checkpoint = load_checkpoint(
                 config.resume,
@@ -595,6 +682,7 @@ def run(config: TrainConfig) -> Path:
                 "lambda_l1",
                 "lambda_gan",
                 "grad_clip",
+                "max_consecutive_scaler_skips",
                 "asinh_scale",
                 "decay_start_epoch",
                 "initialization",
@@ -609,6 +697,8 @@ def run(config: TrainConfig) -> Path:
             for field in compatibility_fields:
                 checkpoint_value = checkpoint_config.get(field)
                 current_value = current_config.get(field)
+                if field == "max_consecutive_scaler_skips" and checkpoint_value is None:
+                    checkpoint_value = 20
                 if field in {"train_csv", "val_csv", "mni_reference"}:
                     checkpoint_value = str(Path(checkpoint_value).resolve())
                     current_value = str(Path(current_value).resolve())
@@ -642,6 +732,7 @@ def run(config: TrainConfig) -> Path:
                     str(k): float(v) for k, v in state.get("epoch_sums", {}).items()
                 }
                 resumed_batches = int(state.get("epoch_batches", 0))
+                resumed_scaler_skips = int(state.get("epoch_scaler_skips", 0))
             global_step = int(checkpoint["global_step"])
             samples_seen = int(checkpoint.get("samples_seen", 0))
             best = float(checkpoint.get("best_metric", best))
@@ -705,6 +796,7 @@ def run(config: TrainConfig) -> Path:
             discriminator.train()
             train_sums = dict(resumed_sums) if epoch == start_epoch else {}
             train_batches = int(resumed_batches) if epoch == start_epoch else 0
+            epoch_scaler_skips = int(resumed_scaler_skips) if epoch == start_epoch else 0
             consumed_batches = resume_batch if epoch == start_epoch else 0
             epoch_start = time.monotonic()
 
@@ -727,7 +819,7 @@ def run(config: TrainConfig) -> Path:
                     d_real = adversarial(real_logits, torch.ones_like(real_logits))
                     d_fake = adversarial(fake_logits, torch.zeros_like(fake_logits))
                     d_loss = 0.5 * (d_real + d_fake)
-                d_grad = _backward_and_prepare_step(
+                d_grad, d_finite = _backward_and_prepare_step(
                     loss=d_loss,
                     optimizer=d_opt,
                     parameters=discriminator.parameters(),
@@ -743,7 +835,7 @@ def run(config: TrainConfig) -> Path:
                     g_adv = adversarial(fake_logits, torch.ones_like(fake_logits))
                     g_l1 = l1(fake, target)
                     g_loss = config.lambda_gan * g_adv + config.lambda_l1 * g_l1
-                g_grad = _backward_and_prepare_step(
+                g_grad, g_finite = _backward_and_prepare_step(
                     loss=g_loss,
                     optimizer=g_opt,
                     parameters=generator.parameters(),
@@ -752,8 +844,34 @@ def run(config: TrainConfig) -> Path:
                 )
                 _set_requires_grad(discriminator, True)
 
-                if scaler.is_enabled():
-                    scaler.update()
+                step_taken = _finish_joint_optimizer_step(
+                    d_optimizer=d_opt,
+                    g_optimizer=g_opt,
+                    scaler=scaler,
+                    local_finite=d_finite and g_finite,
+                    runtime=runtime,
+                )
+                consumed_batches = batch_index + 1
+                samples_seen += int(source.shape[0]) * int(runtime.world_size)
+                if not step_taken:
+                    consecutive_scaler_skips, epoch_scaler_skips = _record_scaler_skip(
+                        consecutive_scaler_skips,
+                        epoch_scaler_skips,
+                        maximum=config.max_consecutive_scaler_skips,
+                    )
+                    if runtime.is_main and (
+                        consecutive_scaler_skips == 1
+                        or consecutive_scaler_skips % 5 == 0
+                    ):
+                        print(
+                            "fp16_scaler_skip "
+                            f"epoch={epoch} batch={consumed_batches}/{len(train_loader)} "
+                            f"consecutive={consecutive_scaler_skips} "
+                            f"scale={scaler.get_scale():.8g}",
+                            flush=True,
+                        )
+                    continue
+                consecutive_scaler_skips = 0
 
                 d_after = require_optimizer_advanced(
                     d_opt,
@@ -776,9 +894,7 @@ def run(config: TrainConfig) -> Path:
                         "Successful optimizer updates do not match global_step: "
                         f"optimizer_updates={g_after}, global_step={global_step}"
                     )
-                consumed_batches = batch_index + 1
                 train_batches += 1
-                samples_seen += int(source.shape[0]) * int(runtime.world_size)
                 values = {
                     "train_g_total": float(g_loss.detach().item()),
                     "train_g_adversarial": float(g_adv.detach().item()),
@@ -807,6 +923,7 @@ def run(config: TrainConfig) -> Path:
                                 "lr_g": g_opt.param_groups[0]["lr"],
                                 "lr_d": d_opt.param_groups[0]["lr"],
                                 "precision": precision.resolved,
+                                "epoch_scaler_skips": epoch_scaler_skips,
                                 **reduced_step,
                             },
                         )
@@ -843,6 +960,7 @@ def run(config: TrainConfig) -> Path:
                         precision_payload=precision.as_dict(),
                         training_sums=train_sums,
                         training_batches=train_batches,
+                        training_scaler_skips=epoch_scaler_skips,
                         save_named_step=True,
                     )
 
@@ -851,7 +969,10 @@ def run(config: TrainConfig) -> Path:
                     break
 
             if train_batches == 0:
-                raise RuntimeError("Training epoch completed without a successful optimizer update")
+                raise RuntimeError(
+                    "Training epoch completed without a successful optimizer update: "
+                    f"fp16_scaler_skips={epoch_scaler_skips}"
+                )
             epoch_complete = consumed_batches >= len(train_loader)
             train_metrics = _reduce_metric_sums(train_sums, train_batches, runtime)
             val_metrics = _validate(
@@ -890,6 +1011,7 @@ def run(config: TrainConfig) -> Path:
                 precision_payload=precision.as_dict(),
                 training_sums=train_sums,
                 training_batches=train_batches,
+                training_scaler_skips=epoch_scaler_skips,
                 save_named_step=False,
             )
             if improved:
@@ -911,7 +1033,9 @@ def run(config: TrainConfig) -> Path:
                     config=asdict(config),
                     best_metric=best,
                     precision=precision.as_dict(),
-                    training_state=_checkpoint_training_state(train_sums, train_batches),
+                    training_state=_checkpoint_training_state(
+                        train_sums, train_batches, epoch_scaler_skips
+                    ),
                 )
 
             if runtime.is_main:
@@ -930,6 +1054,8 @@ def run(config: TrainConfig) -> Path:
                     "lr_d": d_opt.param_groups[0]["lr"],
                     "epoch_seconds": time.monotonic() - epoch_start,
                     "precision": precision.resolved,
+                    "fp16_scaler_skipped_batches": epoch_scaler_skips,
+                    "fp16_scaler_scale": scaler.get_scale() if scaler.is_enabled() else 1.0,
                     "best_val_l1_normalized": best,
                     **train_metrics,
                     **val_metrics,
@@ -975,6 +1101,7 @@ def run(config: TrainConfig) -> Path:
             resume_batch = 0
             resumed_sums = {}
             resumed_batches = 0
+            resumed_scaler_skips = 0
             if stop_training:
                 break
 

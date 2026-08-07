@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from smartpet.checkpoint_io import safe_torch_load
 
 _EPS = 1e-8
+_QUANTILE_MAX_ELEMENTS = 1 << 22
 
 
 def _gaussian_kernel_1d(
@@ -79,6 +80,16 @@ def ssim3d(
     return score.mean(dim=reduce_dims)
 
 
+def _quantile(values: torch.Tensor, q: float) -> torch.Tensor:
+    """Compute a deterministic quantile without exceeding PyTorch's size limit."""
+
+    flat = values.reshape(-1)
+    if flat.numel() > _QUANTILE_MAX_ELEMENTS:
+        step = flat.numel() // _QUANTILE_MAX_ELEMENTS + 1
+        flat = flat[::step]
+    return torch.quantile(flat, q)
+
+
 def _snr_and_cnr(
     volume: torch.Tensor,
     reference: torch.Tensor,
@@ -93,7 +104,7 @@ def _snr_and_cnr(
     positive = reference[reference > 0]
     if positive.numel() < 16:
         positive = reference.reshape(-1)
-    threshold = torch.quantile(positive, 0.05)
+    threshold = _quantile(positive, 0.05)
     foreground = reference > threshold
     ref_values = reference[foreground]
     values = volume[foreground]
@@ -105,8 +116,8 @@ def _snr_and_cnr(
     std = values.std(unbiased=False).clamp_min(_EPS)
     snr = mean.abs() / std
 
-    q25 = torch.quantile(ref_values, 0.25)
-    q75 = torch.quantile(ref_values, 0.75)
+    q25 = _quantile(ref_values, 0.25)
+    q75 = _quantile(ref_values, 0.75)
     low = values[ref_values <= q25]
     high = values[ref_values >= q75]
     if low.numel() < 2 or high.numel() < 2:

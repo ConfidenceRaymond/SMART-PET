@@ -6,6 +6,11 @@ SMART-PET v0.3.0 expects **preprocessed scalar 3D NIfTI volumes**. Training and 
 subject_id,source_path,target_path
 ```
 
+Subject identifiers are read as opaque strings, so zero padding such as `007`
+is preserved. Whitespace-only cells are rejected. Relative source and target
+paths are resolved against the CSV file's directory rather than the process
+working directory, and source and target must resolve to different files.
+
 Source and target volumes must be different files with the same shape, affine, voxel spacing, and canonical orientation as the supplied MNI reference. Model-facing volumes are expected in the non-negative normalized domain:
 
 ```text
