@@ -23,8 +23,9 @@ progress counters, and RNG streams. The parent checkpoint path and SHA-256 are
 recorded in `run_manifest.json`.
 
 The checkpoint architecture must match `base_channels`, `attention_levels`,
-`output_mode`, and `asinh_scale`. A configuration change that alters the model
-or physical output contract is rejected rather than partially loaded.
+`output_mode`, `asinh_scale`, and all configurable S4 fields described in
+`docs/CORRECTED_S4.md`. A configuration change that alters the model or physical
+output contract is rejected rather than partially loaded.
 
 Recommended first fine-tuning study:
 

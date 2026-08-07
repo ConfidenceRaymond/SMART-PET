@@ -83,6 +83,9 @@ def test_audit_accepts_consistent_checkpoint(tmp_path: Path) -> None:
     )
     assert result["generator_updates"] == 1
     assert result["discriminator_updates"] == 1
+    assert result["architecture"]["similarity_mode"] == "v030_luminance"
+    assert result["architecture"]["encoder_convs_per_level"] == 1
+    assert result["architecture"]["discriminator_spectral_norm"] is False
 
 
 def test_audit_rejects_legacy_checkpoint(tmp_path: Path) -> None:

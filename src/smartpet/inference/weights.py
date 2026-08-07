@@ -10,15 +10,21 @@ import torch
 
 from smartpet import __version__
 from smartpet.checkpoint_io import safe_torch_load, sha256_file
-from smartpet.models import OUTPUT_MODES, SmartPETGenerator
+from smartpet.models import (
+    ARCHITECTURE_CONFIG_FIELDS,
+    OUTPUT_MODES,
+    SmartPETGenerator,
+    normalize_architecture_config,
+)
 from smartpet.training.checkpoint import (
     CHECKPOINT_FORMAT_VERSION,
     atomic_save,
 )
 
-INFERENCE_WEIGHTS_FORMAT_VERSION = 1
+INFERENCE_WEIGHTS_FORMAT_VERSION = 2
+SUPPORTED_INFERENCE_WEIGHTS_FORMATS = (1, 2)
 INFERENCE_WEIGHTS_ARTIFACT_TYPE = "smartpet_inference_weights"
-_INFERENCE_CONFIG_FIELDS = (
+_BASE_INFERENCE_CONFIG_FIELDS = (
     "base_channels",
     "attention_levels",
     "output_mode",
@@ -41,10 +47,14 @@ def _validate_sha256(value: object, *, field_name: str) -> str:
     return digest
 
 
-def _validated_config(raw: object) -> dict[str, Any]:
+def _validated_config(
+    raw: object,
+    *,
+    allow_v030_architecture: bool,
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise RuntimeError("Inference weights config must be a mapping")
-    missing = [field for field in _INFERENCE_CONFIG_FIELDS if raw.get(field) is None]
+    missing = [field for field in _BASE_INFERENCE_CONFIG_FIELDS if raw.get(field) is None]
     if missing:
         raise RuntimeError(f"Inference weights config is missing required fields: {missing}")
 
@@ -86,12 +96,21 @@ def _validated_config(raw: object) -> dict[str, Any]:
     if any(value <= 0 for value in patch_size):
         raise RuntimeError("Inference weights patch_size values must be positive")
 
+    try:
+        architecture = normalize_architecture_config(
+            raw,
+            allow_v030_defaults=allow_v030_architecture,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid inference architecture config: {exc}") from exc
+
     return {
         "base_channels": int(base_channels),
         "attention_levels": list(attention_levels),
         "output_mode": output_mode,
         "asinh_scale": float(asinh_scale),
         "patch_size": list(patch_size),
+        **architecture,
     }
 
 
@@ -108,6 +127,31 @@ def _validate_state_dict(raw: object) -> dict[str, torch.Tensor]:
             f"invalid keys={invalid_values[:5]}"
         )
     return dict(raw)
+
+
+def _generator_from_config(config: Mapping[str, Any]) -> SmartPETGenerator:
+    return SmartPETGenerator(
+        int(config["base_channels"]),
+        attention_levels=tuple(config["attention_levels"]),
+        output_mode=str(config["output_mode"]),
+        similarity_mode=str(config["similarity_mode"]),
+        encoder_convs_per_level=int(config["encoder_convs_per_level"]),
+        channel_spatial_input_projection=bool(config["channel_spatial_input_projection"]),
+        generator_spectral_norm=bool(config["generator_spectral_norm"]),
+    )
+
+
+def _validate_model_state(
+    config: Mapping[str, Any],
+    generator_state: Mapping[str, torch.Tensor],
+) -> None:
+    model = _generator_from_config(config)
+    try:
+        model.load_state_dict(generator_state, strict=True)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Inference weights generator_state does not match the recorded architecture"
+        ) from exc
 
 
 def export_inference_weights(
@@ -134,8 +178,15 @@ def export_inference_weights(
             f"format {CHECKPOINT_FORMAT_VERSION}; convert the trusted legacy file first."
         )
 
-    config = _validated_config(_required(full, "config"))
+    # Format-4 v0.3.0 checkpoints predate explicit S4 architecture fields. The
+    # all-absent case is the immutable v0.3.0 schema; partial metadata is refused.
+    config = _validated_config(
+        _required(full, "config"),
+        allow_v030_architecture=True,
+    )
     generator_state = _validate_state_dict(_required(full, "generator_state"))
+    _validate_model_state(config, generator_state)
+
     global_step = int(_required(full, "global_step"))
     epoch = int(_required(full, "epoch"))
     best_metric = float(_required(full, "best_metric"))
@@ -175,9 +226,7 @@ def audit_inference_weights(
     if expected_sha256 is not None:
         expected = _validate_sha256(expected_sha256, field_name="expected_sha256")
         if actual_sha256 != expected:
-            raise RuntimeError(
-                f"SHA-256 mismatch: expected {expected}, got {actual_sha256}"
-            )
+            raise RuntimeError(f"SHA-256 mismatch: expected {expected}, got {actual_sha256}")
 
     payload = safe_torch_load(artifact_path)
     artifact_type = _required(payload, "artifact_type")
@@ -187,13 +236,16 @@ def audit_inference_weights(
             f"found {artifact_type!r}"
         )
     format_version = int(_required(payload, "format_version"))
-    if format_version != INFERENCE_WEIGHTS_FORMAT_VERSION:
+    if format_version not in SUPPORTED_INFERENCE_WEIGHTS_FORMATS:
         raise RuntimeError(
             f"Unsupported inference weights format_version={format_version}; "
-            f"expected {INFERENCE_WEIGHTS_FORMAT_VERSION}"
+            f"expected one of {SUPPORTED_INFERENCE_WEIGHTS_FORMATS}"
         )
 
-    config = _validated_config(_required(payload, "config"))
+    config = _validated_config(
+        _required(payload, "config"),
+        allow_v030_architecture=(format_version == 1),
+    )
     generator_state = _validate_state_dict(_required(payload, "generator_state"))
     parent_sha256 = _validate_sha256(
         _required(payload, "source_checkpoint_sha256"),
@@ -223,17 +275,7 @@ def audit_inference_weights(
         )
 
     if validate_model_state:
-        model = SmartPETGenerator(
-            int(config["base_channels"]),
-            attention_levels=tuple(config["attention_levels"]),
-            output_mode=str(config["output_mode"]),
-        )
-        try:
-            model.load_state_dict(generator_state, strict=True)
-        except RuntimeError as exc:
-            raise RuntimeError(
-                "Inference weights generator_state does not match the recorded architecture"
-            ) from exc
+        _validate_model_state(config, generator_state)
 
     return {
         "path": str(artifact_path),
@@ -242,6 +284,7 @@ def audit_inference_weights(
         "artifact_type": artifact_type,
         "smartpet_version": smartpet_version,
         "config": config,
+        "architecture_config_fields": list(ARCHITECTURE_CONFIG_FIELDS),
         "source_checkpoint_sha256": parent_sha256,
         "source_checkpoint_format_version": source_format_version,
         "source_smartpet_version": source_smartpet_version,

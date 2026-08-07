@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -68,3 +69,42 @@ def test_config_accepts_batch_size_alias_in_overrides(tmp_path):
     path.write_text(json.dumps(_base(tmp_path)))
     config = load_train_config(path, overrides={"batch_size_per_rank": 2})
     assert config.batch_size == 2
+
+
+def test_corrected_s4_config_fields_are_strictly_loaded(tmp_path):
+    payload = _base(tmp_path)
+    payload.update(
+        {
+            "similarity_mode": "scale_consistent",
+            "encoder_convs_per_level": 2,
+            "channel_spatial_input_projection": True,
+            "generator_spectral_norm": False,
+            "discriminator_spectral_norm": True,
+        }
+    )
+    path = tmp_path / "corrected.json"
+    path.write_text(json.dumps(payload))
+    config = load_train_config(path)
+    assert config.similarity_mode == "scale_consistent"
+    assert config.encoder_convs_per_level == 2
+    assert config.channel_spatial_input_projection is True
+    assert config.discriminator_spectral_norm is True
+
+
+def test_architecture_boolean_fields_reject_integer_aliases(tmp_path):
+    payload = _base(tmp_path)
+    payload["discriminator_spectral_norm"] = 1
+    path = tmp_path / "invalid_bool.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(TypeError, match="discriminator_spectral_norm"):
+        load_train_config(path)
+
+
+def test_repository_corrected_s4_profile_loads() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_train_config(root / "configs" / "train_corrected_s4.json")
+    assert config.similarity_mode == "scale_consistent"
+    assert config.encoder_convs_per_level == 2
+    assert config.channel_spatial_input_projection is True
+    assert config.generator_spectral_norm is False
+    assert config.discriminator_spectral_norm is True

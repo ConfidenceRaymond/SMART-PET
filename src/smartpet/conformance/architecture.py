@@ -57,6 +57,16 @@ def architecture_report(generator: nn.Module, discriminator: nn.Module) -> dict[
             "encoder_conv3d_counts": encoder_conv_counts,
             "attention_levels": list(getattr(generator, "attention_levels", ())),
             "attention_blocks": attention_blocks,
+            "similarity_mode": getattr(generator, "similarity_mode", None),
+            "encoder_convs_per_level": getattr(
+                generator, "encoder_convs_per_level", None
+            ),
+            "channel_spatial_input_projection": getattr(
+                generator, "channel_spatial_input_projection", None
+            ),
+            "generator_spectral_norm": getattr(
+                generator, "generator_spectral_norm", None
+            ),
             "output_mode": getattr(generator, "output_mode", None),
             "output_head": type(getattr(generator, "output", None)).__name__,
         },
@@ -66,6 +76,7 @@ def architecture_report(generator: nn.Module, discriminator: nn.Module) -> dict[
             "trainable_parameters": _parameter_count(discriminator, trainable_only=True),
             "module_counts": _module_inventory(discriminator),
             "spectral_norm_paths": _spectral_norm_paths(discriminator),
+            "spectral_norm": getattr(discriminator, "spectral_norm", None),
             "has_sigmoid": discriminator_has_sigmoid,
             "output_contract": "probability" if discriminator_has_sigmoid else "raw_logits",
         },

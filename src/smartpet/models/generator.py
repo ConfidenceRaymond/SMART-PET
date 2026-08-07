@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from .attention import SSAB3D
 from .blocks import DecoderBlock, EncoderBlock
+from .contracts import SIMILARITY_MODES
 
 OUTPUT_MODES = ("linear", "positive_softplus_residual")
 
@@ -46,38 +47,99 @@ class SmartPETGenerator(nn.Module):
         *,
         output_mode: str = "linear",
         output_epsilon: float = 1e-6,
+        similarity_mode: str = "v030_luminance",
+        encoder_convs_per_level: int = 1,
+        channel_spatial_input_projection: bool = False,
+        generator_spectral_norm: bool = False,
     ) -> None:
         super().__init__()
         if output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unsupported output_mode={output_mode!r}; expected {OUTPUT_MODES}")
+        if similarity_mode not in SIMILARITY_MODES:
+            raise ValueError(
+                f"Unsupported similarity_mode={similarity_mode!r}; expected {SIMILARITY_MODES}"
+            )
+        if encoder_convs_per_level not in {1, 2}:
+            raise ValueError("encoder_convs_per_level must be 1 or 2")
+
         b = int(base_channels)
         channels = [b, 2 * b, 4 * b, 8 * b, 16 * b, 16 * b, 16 * b]
         self.encoders = nn.ModuleList(
-            [EncoderBlock(1, channels[0], first=True)]
+            [
+                EncoderBlock(
+                    1,
+                    channels[0],
+                    first=True,
+                    convs_per_level=encoder_convs_per_level,
+                    use_spectral_norm=generator_spectral_norm,
+                )
+            ]
             + [
                 EncoderBlock(
                     channels[i - 1],
                     channels[i],
                     use_norm=(i != len(channels) - 1),
+                    convs_per_level=encoder_convs_per_level,
+                    use_spectral_norm=generator_spectral_norm,
                 )
                 for i in range(1, len(channels))
             ]
         )
         self.attention_levels = tuple(int(v) for v in attention_levels)
-        self.attention = nn.ModuleDict({str(i): SSAB3D(channels[i]) for i in self.attention_levels})
+        self.attention = nn.ModuleDict(
+            {
+                str(i): SSAB3D(
+                    channels[i],
+                    similarity_mode=similarity_mode,
+                    channel_spatial_input_projection=channel_spatial_input_projection,
+                )
+                for i in self.attention_levels
+            }
+        )
         self.decoders = nn.ModuleList(
             [
-                DecoderBlock(channels[6], channels[5], dropout=0.5),
-                DecoderBlock(channels[5] + channels[5], channels[4], dropout=0.5),
-                DecoderBlock(channels[4] + channels[4], channels[3], dropout=0.5),
-                DecoderBlock(channels[3] + channels[3], channels[2]),
-                DecoderBlock(channels[2] + channels[2], channels[1]),
-                DecoderBlock(channels[1] + channels[1], channels[0]),
+                DecoderBlock(
+                    channels[6],
+                    channels[5],
+                    dropout=0.5,
+                    use_spectral_norm=generator_spectral_norm,
+                ),
+                DecoderBlock(
+                    channels[5] + channels[5],
+                    channels[4],
+                    dropout=0.5,
+                    use_spectral_norm=generator_spectral_norm,
+                ),
+                DecoderBlock(
+                    channels[4] + channels[4],
+                    channels[3],
+                    dropout=0.5,
+                    use_spectral_norm=generator_spectral_norm,
+                ),
+                DecoderBlock(
+                    channels[3] + channels[3],
+                    channels[2],
+                    use_spectral_norm=generator_spectral_norm,
+                ),
+                DecoderBlock(
+                    channels[2] + channels[2],
+                    channels[1],
+                    use_spectral_norm=generator_spectral_norm,
+                ),
+                DecoderBlock(
+                    channels[1] + channels[1],
+                    channels[0],
+                    use_spectral_norm=generator_spectral_norm,
+                ),
             ]
         )
         self.output = nn.ConvTranspose3d(channels[0] + channels[0], 1, 4, 2, 1)
         self.output_mode = str(output_mode)
         self.output_epsilon = float(output_epsilon)
+        self.similarity_mode = str(similarity_mode)
+        self.encoder_convs_per_level = int(encoder_convs_per_level)
+        self.channel_spatial_input_projection = bool(channel_spatial_input_projection)
+        self.generator_spectral_norm = bool(generator_spectral_norm)
 
     def forward(self, source: torch.Tensor) -> torch.Tensor:
         if source.ndim != 5 or source.shape[1] != 1:

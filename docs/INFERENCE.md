@@ -25,3 +25,10 @@ smartpet-infer-batch \
 ```
 
 The batch CLI loads the model only once. Every case receives a content-based prediction identifier and JSON provenance. Existing complete outputs are skipped unless `--overwrite` is supplied.
+
+## Architecture metadata
+
+Inference reconstructs the generator from the artifact's recorded architecture.
+Format-2 inference weights require all configurable S4 fields. Existing format-1
+weights resolve to the frozen v0.3.0 profile. SMART-PET never guesses a partial
+architecture configuration.

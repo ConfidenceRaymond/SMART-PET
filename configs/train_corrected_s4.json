@@ -1,9 +1,9 @@
 {
-  "profile": "smartpet_v0.3.0_from_scratch",
+  "profile": "smartpet_v0.3.1_corrected_s4",
   "train_csv": "examples/train_manifest.csv",
   "val_csv": "examples/validation_manifest.csv",
   "mni_reference": "/path/to/mni_reference.nii.gz",
-  "out_dir": "/path/to/runs/smartpet_from_scratch",
+  "out_dir": "/path/to/runs/smartpet_corrected_s4",
   "backend": "auto",
   "patch_size": [
     128,
@@ -15,11 +15,11 @@
     2,
     3
   ],
-  "similarity_mode": "v030_luminance",
-  "encoder_convs_per_level": 1,
-  "channel_spatial_input_projection": false,
+  "similarity_mode": "scale_consistent",
+  "encoder_convs_per_level": 2,
+  "channel_spatial_input_projection": true,
   "generator_spectral_norm": false,
-  "discriminator_spectral_norm": false,
+  "discriminator_spectral_norm": true,
   "batch_size": 1,
   "epochs": 35,
   "lr": 0.0001,

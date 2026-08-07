@@ -32,6 +32,30 @@ advance `global_step`. Each epoch records `fp16_scaler_skipped_batches` and the
 final scaler value. The run stops after `max_consecutive_scaler_skips`
 consecutive skipped batches because sustained overflow indicates divergence.
 
+## Architecture profiles
+
+The frozen v0.3.0 profile is `configs/train_from_scratch.json`. The corrected
+Phase 2B candidate is `configs/train_corrected_s4.json`. The five S4 architecture
+fields are mandatory in maintained configuration files:
+
+| Field | Frozen v0.3.0 | Corrected candidate |
+|---|---|---|
+| `similarity_mode` | `v030_luminance` | `scale_consistent` |
+| `encoder_convs_per_level` | `1` | `2` |
+| `channel_spatial_input_projection` | `false` | `true` |
+| `generator_spectral_norm` | `false` | `false` |
+| `discriminator_spectral_norm` | `false` | `true` |
+
+Run the corrected candidate with:
+
+```bash
+smartpet-train --config configs/train_corrected_s4.json --backend single
+```
+
+Do not resume or fine-tune across architecture profiles. Full checkpoints record
+these fields, and SMART-PET rejects mismatches before training continues. See
+`docs/CORRECTED_S4.md` for the operator-level contract.
+
 ## Exact continuation
 
 ```bash

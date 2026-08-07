@@ -153,7 +153,7 @@ The earlier complete-grid result of 37.55 dB included substantial background and
 
 ## Attention configuration
 
-The baseline uses **combined SSAB3D**, consisting of axial self-attention, similarity attention, and channel-spatial attention. `attention_levels: [2, 3]` places SSAB blocks at the 16³ and 8³ encoder feature maps for a 128³ input. It is not a standalone “SAM4” model.
+The frozen v0.3.0 baseline uses **combined SSAB3D**, consisting of axial self-attention, similarity attention, and channel-spatial attention. `attention_levels: [2, 3]` places SSAB blocks at the 16³ and 8³ encoder feature maps for a 128³ input. The v0.3.1 development branch adds explicit historical and corrected similarity modes, corrected Equation 5 wiring, configurable encoder depth, the restored channel-spatial input projection, and configurable spectral normalization. It is not a standalone “SAM4” model.
 
 ## Documentation
 
@@ -167,6 +167,7 @@ The baseline uses **combined SSAB3D**, consisting of axial self-attention, simil
 - [Evaluation](docs/EVALUATION.md)
 - [Changes from the paper](docs/CHANGES_FROM_PAPER.md)
 - [Historical conformance contract](docs/HISTORICAL_CONFORMANCE.md)
+- [Corrected configurable S4](docs/CORRECTED_S4.md)
 - [Model card](docs/MODEL_CARD.md)
 - [Offline GitHub release](docs/GITHUB_RELEASE.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)

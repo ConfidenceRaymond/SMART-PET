@@ -23,9 +23,12 @@ fine-tuning. Do not store multi-gigabyte checkpoints directly in Git.
 ## Inference-only weights
 
 Inference exports use `artifact_type=smartpet_inference_weights` and their own
-format version. They contain only the generator state, inference-critical
-configuration, source-checkpoint digest, source step/epoch, and export version.
-They contain no discriminator, optimizer, scheduler, scaler, or RNG state.
+format version. Format 2 records the complete configurable S4 architecture.
+Format 1 remains readable as the immutable v0.3.0 architecture profile; partial
+architecture metadata is rejected. Exports contain only the generator state,
+inference-critical configuration, source-checkpoint digest, source step/epoch,
+and export version. They contain no discriminator, optimizer, scheduler, scaler,
+or RNG state.
 
 Create them reproducibly:
 

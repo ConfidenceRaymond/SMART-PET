@@ -38,6 +38,11 @@ def main() -> None:
     print(f"[OK] source checkpoint SHA-256={result['source_checkpoint_sha256']}")
     print(f"[OK] source global_step={result['source_global_step']}")
     print(f"[OK] source epoch={result['source_epoch']}")
+    print(f"[OK] similarity_mode={result['config']['similarity_mode']}")
+    print(
+        "[OK] encoder_convs_per_level="
+        f"{result['config']['encoder_convs_per_level']}"
+    )
     print("[OK] SMART-PET INFERENCE WEIGHTS AUDIT PASSED")
 
 

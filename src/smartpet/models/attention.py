@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .contracts import SIMILARITY_MODES
+
 
 class AxialSelfAttention3D(nn.Module):
     """Memory-bounded axial attention over depth and in-plane positions."""
@@ -38,31 +40,144 @@ class AxialSelfAttention3D(nn.Module):
         return x + self.gamma * (depth + plane)
 
 
-class SimilarityAttention3D(nn.Module):
-    """Local SSIM-inspired self-similarity gate from the SMART-PET design."""
+def _gaussian_window_3d(
+    kernel_size: int,
+    sigma: float,
+    channels: int,
+) -> torch.Tensor:
+    if kernel_size <= 0 or kernel_size % 2 == 0:
+        raise ValueError("kernel_size must be a positive odd integer")
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+    coordinates = torch.arange(kernel_size, dtype=torch.float32)
+    coordinates = coordinates - kernel_size // 2
+    one_d = torch.exp(-(coordinates.square()) / (2.0 * float(sigma) ** 2))
+    one_d = one_d / one_d.sum()
+    window = torch.einsum("i,j,k->ijk", one_d, one_d, one_d)
+    return window.reshape(1, 1, kernel_size, kernel_size, kernel_size).expand(
+        channels, 1, -1, -1, -1
+    )
 
-    def __init__(self, channels: int, kernel_size: int = 7) -> None:
+
+class SimilarityAttention3D(nn.Module):
+    """SMART-PET similarity gate with explicit historical and corrected modes.
+
+    ``v030_luminance`` preserves the v0.3.0 module and state-dict contract.
+    ``paper_exact`` implements the published variance-squared Equation 4.
+    ``scale_consistent`` uses the SSIM contrast form between local variance and
+    its spatial reference, so numerator, denominator, and c2 share units.
+
+    Both corrected modes implement Equation 5 as two separate convolutions:
+    one receives the similarity map and the other receives the feature map.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        mode: str = "v030_luminance",
+        window_size: int = 11,
+        sigma: float = 3.0,
+        gate_kernel_size: int = 7,
+        k2: float = 0.03,
+    ) -> None:
         super().__init__()
-        padding = kernel_size // 2
-        self.smooth = nn.AvgPool3d(kernel_size, stride=1, padding=padding)
-        self.gate = nn.Conv3d(channels * 2, channels, kernel_size, padding=padding)
+        if mode not in SIMILARITY_MODES:
+            raise ValueError(f"Unsupported similarity mode={mode!r}; expected {SIMILARITY_MODES}")
+        if gate_kernel_size <= 0 or gate_kernel_size % 2 == 0:
+            raise ValueError("gate_kernel_size must be a positive odd integer")
+        if k2 <= 0:
+            raise ValueError("k2 must be positive")
+
+        self.channels = int(channels)
+        self.mode = str(mode)
+        self.k2 = float(k2)
+
+        if self.mode == "v030_luminance":
+            padding = gate_kernel_size // 2
+            self.smooth = nn.AvgPool3d(gate_kernel_size, stride=1, padding=padding)
+            self.gate = nn.Conv3d(
+                self.channels * 2,
+                self.channels,
+                gate_kernel_size,
+                padding=padding,
+            )
+        else:
+            self.padding = window_size // 2
+            self.register_buffer(
+                "window",
+                _gaussian_window_3d(window_size, sigma, self.channels),
+                persistent=False,
+            )
+            gate_padding = gate_kernel_size // 2
+            self.conv_similarity = nn.Conv3d(
+                self.channels,
+                self.channels,
+                gate_kernel_size,
+                padding=gate_padding,
+            )
+            self.conv_feature = nn.Conv3d(
+                self.channels,
+                self.channels,
+                gate_kernel_size,
+                padding=gate_padding,
+            )
+
+    def _variance(self, x: torch.Tensor) -> torch.Tensor:
+        window = self.window.to(device=x.device, dtype=x.dtype)
+        mean = F.conv3d(x, window, padding=self.padding, groups=self.channels)
+        second = F.conv3d(x.square(), window, padding=self.padding, groups=self.channels)
+        return (second - mean.square()).clamp_min(0.0)
+
+    def similarity_map(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 5 or x.shape[1] != self.channels:
+            raise ValueError(
+                f"Expected [B,{self.channels},D,H,W], got {tuple(x.shape)}"
+            )
+        if self.mode == "v030_luminance":
+            mean = self.smooth(x)
+            return (2.0 * x * mean + 1e-4) / (x.square() + mean.square() + 1e-4)
+
+        variance = self._variance(x)
+        data_range = x.amax(dim=(2, 3, 4), keepdim=True) - x.amin(
+            dim=(2, 3, 4), keepdim=True
+        )
+        epsilon = torch.finfo(x.dtype).eps
+        c2 = (self.k2 * data_range.clamp_min(epsilon)).square()
+        if self.mode == "paper_exact":
+            return (2.0 * variance + c2) / (2.0 * variance.square() + c2)
+
+        reference_variance = variance.mean(dim=(2, 3, 4), keepdim=True)
+        numerator = 2.0 * torch.sqrt(variance * reference_variance) + c2
+        denominator = variance + reference_variance + c2
+        return numerator / denominator.clamp_min(epsilon)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        mean = self.smooth(x)
-        variance = torch.clamp(self.smooth(x * x) - mean * mean, min=0.0)
-        similarity = (2.0 * x * mean + 1e-4) / (x * x + mean * mean + 1e-4)
-        descriptor = torch.cat([similarity, torch.sqrt(variance + 1e-6)], dim=1)
-        return x * torch.sigmoid(self.gate(descriptor))
+        similarity = self.similarity_map(x)
+        if self.mode == "v030_luminance":
+            mean = self.smooth(x)
+            variance = torch.clamp(self.smooth(x.square()) - mean.square(), min=0.0)
+            descriptor = torch.cat([similarity, torch.sqrt(variance + 1e-6)], dim=1)
+            return x * torch.sigmoid(self.gate(descriptor))
+        gate = torch.sigmoid(self.conv_similarity(similarity) + self.conv_feature(x))
+        return x * gate
 
 
 class ChannelSpatialAttention3D(nn.Module):
-    def __init__(self, channels: int, reduction: int = 16) -> None:
+    def __init__(
+        self,
+        channels: int,
+        reduction: int = 16,
+        *,
+        input_projection: bool = False,
+    ) -> None:
         super().__init__()
         hidden = max(1, channels // reduction)
         self.channel = nn.Sequential(
             nn.Conv3d(channels, hidden, 1), nn.ReLU(inplace=True), nn.Conv3d(hidden, channels, 1)
         )
         self.spatial = nn.Conv3d(2, 1, 7, padding=3)
+        self.input_projection = nn.Conv3d(channels, 1, 1) if input_projection else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         avg = F.adaptive_avg_pool3d(x, 1)
@@ -75,16 +190,31 @@ class ChannelSpatialAttention3D(nn.Module):
             ],
             dim=1,
         )
-        return x_channel * torch.sigmoid(self.spatial(spatial))
+        spatial_logits = self.spatial(spatial)
+        if self.input_projection is not None:
+            spatial_logits = spatial_logits + self.input_projection(x)
+        return x_channel * torch.sigmoid(spatial_logits)
 
 
 class SSAB3D(nn.Module):
-    def __init__(self, channels: int) -> None:
+    def __init__(
+        self,
+        channels: int,
+        *,
+        similarity_mode: str = "v030_luminance",
+        channel_spatial_input_projection: bool = False,
+    ) -> None:
         super().__init__()
         self.self_attention = AxialSelfAttention3D(channels)
-        self.similarity = SimilarityAttention3D(channels)
-        self.channel_spatial = ChannelSpatialAttention3D(channels)
+        self.similarity = SimilarityAttention3D(channels, mode=similarity_mode)
+        self.channel_spatial = ChannelSpatialAttention3D(
+            channels,
+            input_projection=channel_spatial_input_projection,
+        )
         self.fuse = nn.Conv3d(channels, channels, 3, padding=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Each branch performs its own single gating operation. Do not multiply
+        # by x again here; the historical wrapper's outer multiplication created
+        # an unintended x-squared gain profile.
         return self.fuse(self.self_attention(x) + self.similarity(x) + self.channel_spatial(x))

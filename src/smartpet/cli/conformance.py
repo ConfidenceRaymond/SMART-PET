@@ -14,6 +14,7 @@ from smartpet.conformance.architecture import (
 )
 from smartpet.conformance.gradients import generator_gradient_attribution
 from smartpet.conformance.legacy_reference import attention_comparison_report
+from smartpet.models import SIMILARITY_MODES
 from smartpet.models.discriminator import PatchDiscriminator3D
 from smartpet.models.generator import SmartPETGenerator
 
@@ -85,6 +86,23 @@ def _parser() -> argparse.ArgumentParser:
         default="positive_softplus_residual",
     )
     architecture.add_argument(
+        "--similarity-mode",
+        choices=SIMILARITY_MODES,
+        default="v030_luminance",
+    )
+    architecture.add_argument(
+        "--encoder-convs-per-level",
+        type=int,
+        choices=(1, 2),
+        default=1,
+    )
+    architecture.add_argument(
+        "--channel-spatial-input-projection",
+        action="store_true",
+    )
+    architecture.add_argument("--generator-spectral-norm", action="store_true")
+    architecture.add_argument("--discriminator-spectral-norm", action="store_true")
+    architecture.add_argument(
         "--legacy-contract",
         type=Path,
         default=Path("reference/legacy/architecture_contract.json"),
@@ -112,8 +130,15 @@ def main() -> None:
             base_channels=args.base_channels,
             attention_levels=tuple(args.attention_levels),
             output_mode=args.output_mode,
+            similarity_mode=args.similarity_mode,
+            encoder_convs_per_level=args.encoder_convs_per_level,
+            channel_spatial_input_projection=args.channel_spatial_input_projection,
+            generator_spectral_norm=args.generator_spectral_norm,
         )
-        discriminator = PatchDiscriminator3D(base_channels=args.base_channels)
+        discriminator = PatchDiscriminator3D(
+            base_channels=args.base_channels,
+            spectral_norm=args.discriminator_spectral_norm,
+        )
         payload = architecture_report(generator, discriminator)
         payload["legacy_reference"] = load_legacy_architecture_contract(args.legacy_contract)
     elif args.command == "attention":

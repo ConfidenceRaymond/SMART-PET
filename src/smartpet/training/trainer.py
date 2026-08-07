@@ -23,7 +23,10 @@ from smartpet import __version__
 from smartpet.data.dataset import PairedMNIPatchDataset
 from smartpet.metrics import image_quality_metrics
 from smartpet.models import (
+    ARCHITECTURE_CONFIG_FIELDS,
     OUTPUT_MODES,
+    SIMILARITY_MODES,
+    V030_ARCHITECTURE_DEFAULTS,
     PatchDiscriminator3D,
     SmartPETGenerator,
     initialize_gan_weights,
@@ -62,6 +65,11 @@ class TrainConfig:
     patch_size: tuple[int, int, int] = (128, 128, 128)
     base_channels: int = 32
     attention_levels: tuple[int, ...] = (2, 3)
+    similarity_mode: str = "v030_luminance"
+    encoder_convs_per_level: int = 1
+    channel_spatial_input_projection: bool = False
+    generator_spectral_norm: bool = False
+    discriminator_spectral_norm: bool = False
     batch_size: int = 1
     epochs: int = 35
     lr: float = 1e-4
@@ -102,6 +110,13 @@ class TrainConfig:
     preview_stride: tuple[int, int, int] = (64, 64, 64)
     preview_save_nifti: bool = True
     preview_vgg19_weights: str | None = None
+
+
+def _checkpoint_architecture_value(config: dict[str, Any], field: str) -> Any:
+    value = config.get(field)
+    if value is None and field in V030_ARCHITECTURE_DEFAULTS:
+        return V030_ARCHITECTURE_DEFAULTS[field]
+    return value
 
 
 def seed_all(seed: int, rank: int) -> None:
@@ -464,6 +479,20 @@ def run(config: TrainConfig) -> Path:
     levels = tuple(int(level) for level in config.attention_levels)
     if len(set(levels)) != len(levels) or any(level < 0 or level > 6 for level in levels):
         raise ValueError("attention_levels must contain unique encoder levels in [0, 6]")
+    if config.similarity_mode not in SIMILARITY_MODES:
+        raise ValueError(
+            f"Unsupported similarity_mode={config.similarity_mode!r}; expected {SIMILARITY_MODES}"
+        )
+    if config.encoder_convs_per_level not in {1, 2}:
+        raise ValueError("encoder_convs_per_level must be 1 or 2")
+    boolean_architecture_fields = (
+        "channel_spatial_input_projection",
+        "generator_spectral_norm",
+        "discriminator_spectral_norm",
+    )
+    for field in boolean_architecture_fields:
+        if not isinstance(getattr(config, field), bool):
+            raise TypeError(f"{field} must be a boolean")
     if config.batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if config.epochs <= 0:
@@ -488,6 +517,15 @@ def run(config: TrainConfig) -> Path:
         raise ValueError("asinh_scale must be positive")
     if any(int(v) <= 0 for v in (*config.patch_size, *config.preview_stride)):
         raise ValueError("patch_size and preview_stride must contain positive integers")
+    if levels:
+        smallest = min(levels)
+        scale = 2 ** (smallest + 1)
+        plane = max(1, config.patch_size[1] // scale) * max(1, config.patch_size[2] // scale)
+        if plane > 1024:
+            raise ValueError(
+                "attention_levels request an in-plane sequence longer than 1024: "
+                f"level={smallest}, patch_size={config.patch_size}, sequence={plane}"
+            )
     if config.output_mode not in OUTPUT_MODES:
         raise ValueError(f"Unsupported output_mode={config.output_mode!r}; expected {OUTPUT_MODES}")
     if config.output_mode == "linear":
@@ -568,8 +606,15 @@ def run(config: TrainConfig) -> Path:
             config.base_channels,
             attention_levels=config.attention_levels,
             output_mode=config.output_mode,
+            similarity_mode=config.similarity_mode,
+            encoder_convs_per_level=config.encoder_convs_per_level,
+            channel_spatial_input_projection=config.channel_spatial_input_projection,
+            generator_spectral_norm=config.generator_spectral_norm,
         ).to(runtime.device)
-        raw_discriminator = PatchDiscriminator3D(config.base_channels).to(runtime.device)
+        raw_discriminator = PatchDiscriminator3D(
+            config.base_channels,
+            spectral_norm=config.discriminator_spectral_norm,
+        ).to(runtime.device)
         raw_generator.apply(initialize_gan_weights)
         raw_discriminator.apply(initialize_gan_weights)
         initialize_identity_residual_head(raw_generator.output)
@@ -587,11 +632,12 @@ def run(config: TrainConfig) -> Path:
                 "attention_levels",
                 "output_mode",
                 "asinh_scale",
+                *ARCHITECTURE_CONFIG_FIELDS,
             )
             current_config = asdict(config)
             mismatches: dict[str, tuple[Any, Any]] = {}
             for field in architecture_fields:
-                checkpoint_value = checkpoint_config.get(field)
+                checkpoint_value = _checkpoint_architecture_value(checkpoint_config, field)
                 current_value = current_config[field]
                 if isinstance(checkpoint_value, list):
                     checkpoint_value = tuple(checkpoint_value)
@@ -673,6 +719,7 @@ def run(config: TrainConfig) -> Path:
                 "output_mode",
                 "base_channels",
                 "attention_levels",
+                *ARCHITECTURE_CONFIG_FIELDS,
                 "batch_size",
                 "patch_size",
                 "gan_loss",
@@ -695,7 +742,7 @@ def run(config: TrainConfig) -> Path:
             )
             current_config = asdict(config)
             for field in compatibility_fields:
-                checkpoint_value = checkpoint_config.get(field)
+                checkpoint_value = _checkpoint_architecture_value(checkpoint_config, field)
                 current_value = current_config.get(field)
                 if field == "max_consecutive_scaler_skips" and checkpoint_value is None:
                     checkpoint_value = 20
@@ -749,6 +796,18 @@ def run(config: TrainConfig) -> Path:
             )
             print(f"output_mode={config.output_mode}", flush=True)
             print(f"attention_levels={list(config.attention_levels)}", flush=True)
+            print(f"similarity_mode={config.similarity_mode}", flush=True)
+            print(f"encoder_convs_per_level={config.encoder_convs_per_level}", flush=True)
+            print(
+                "channel_spatial_input_projection="
+                f"{config.channel_spatial_input_projection}",
+                flush=True,
+            )
+            print(f"generator_spectral_norm={config.generator_spectral_norm}", flush=True)
+            print(
+                f"discriminator_spectral_norm={config.discriminator_spectral_norm}",
+                flush=True,
+            )
             print(f"init_checkpoint={config.init_checkpoint or ''}", flush=True)
             print(f"per_rank_batch_size={config.batch_size}", flush=True)
             print(f"global_batch_size={config.batch_size * runtime.world_size}", flush=True)

@@ -20,10 +20,10 @@ The raw snapshot is frozen under `reference/legacy/source/` and protected by
 | Discriminator spectral normalization | Active discriminator blocks | Absent | Restore | Stabilizer restoration |
 | Discriminator output | Sigmoid probability | Raw logits | Preserve raw logits | Historical double-sigmoid defect correction |
 | S4 composition | Self + similarity + channel-spatial, followed by convolution | Same three-branch composition | Preserve | Concept preserved |
-| Similarity statistic | Variance-squared Equation 4 | Luminance-like local comparison | Implement explicit modes in Phase 2B | Required conformance correction |
-| Similarity Equation 5 | Both convolutions receive similarity map | Simplified descriptor fusion | Similarity convolution plus feature convolution | Historical wiring correction |
+| Similarity statistic | Variance-squared Equation 4 | Luminance-like local comparison | Explicit `paper_exact` and `scale_consistent` modes | Required conformance correction |
+| Similarity Equation 5 | Both convolutions receive similarity map | Simplified descriptor fusion | Separate similarity-map and feature-map convolutions | Historical wiring correction |
 | Self-attention | Shared query/key module and custom plane/depth products | Axial scaled dot-product attention | Preserve v0.3.0 operator | Intentional modernization |
-| Channel-spatial attention | Includes `conv1x1(x)` spatial branch | Branch omitted | Restore branch | Required architectural correction |
+| Channel-spatial attention | Includes `conv1x1(x)` spatial branch | Branch omitted | Restored behind explicit configuration | Required architectural correction |
 | Feature gating | Branches gate internally and S4 multiplies by `x` again | Single internal gating | Preserve single gating | Historical `x²`-type defect correction |
 | Attention placement | 16³ and 8³ active; 4³ declared but commented | 16³ and 8³ | Compare `[2,3]` against `[4]` | Controlled experiment |
 | Generator objective | Effective gradient is `0.01 × L1` | `100 × L1 + 1 × LSGAN` | Preserve corrected objective | Historical implementation defect correction |
@@ -97,6 +97,8 @@ smartpet-conformance gradients \
   --output work/audits/phase2a/gradient_attribution.json
 ```
 
-Phase 2A is observational: it does not modify the model architecture or training
-objective. Phase 2B will implement the corrected configurable S4 architecture
-behind explicit configuration fields and acceptance tests.
+Phase 2A remains observational and its frozen reference files are unchanged.
+Phase 2B implements the corrected configurable S4 architecture behind explicit
+configuration fields and acceptance tests. The v0.3.0 profile remains the
+default and retains strict state-dict compatibility. See
+[Corrected configurable S4](CORRECTED_S4.md).

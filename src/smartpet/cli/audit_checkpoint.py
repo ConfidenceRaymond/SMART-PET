@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from smartpet.checkpoint_io import safe_torch_load
+from smartpet.models import normalize_architecture_config
 from smartpet.training.checkpoint import CHECKPOINT_FORMAT_VERSION
 from smartpet.training.precision import optimizer_max_step
 
@@ -74,6 +75,13 @@ def audit_checkpoint(
         raise RuntimeError("Training checkpoint config must be a mapping")
     if config.get("output_mode") is None:
         raise RuntimeError("Training checkpoint config is missing output_mode")
+    try:
+        architecture = normalize_architecture_config(
+            config,
+            allow_v030_defaults=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Training checkpoint architecture config is invalid: {exc}") from exc
     if not checkpoint.get("generator_state"):
         raise RuntimeError("Generator state is empty")
     if not checkpoint.get("discriminator_state"):
@@ -128,6 +136,7 @@ def audit_checkpoint(
         "batch_in_epoch": int(checkpoint.get("batch_in_epoch", 0)),
         "samples_seen": int(checkpoint.get("samples_seen", 0)),
         "output_mode": str(config["output_mode"]),
+        "architecture": architecture,
         "metrics_last": metrics_last,
     }
 
@@ -178,6 +187,11 @@ def main() -> None:
     print(f"[OK] batch_in_epoch={result['batch_in_epoch']}")
     print(f"[OK] samples_seen={result['samples_seen']}")
     print(f"[OK] output_mode={result['output_mode']}")
+    print(f"[OK] similarity_mode={result['architecture']['similarity_mode']}")
+    print(
+        "[OK] encoder_convs_per_level="
+        f"{result['architecture']['encoder_convs_per_level']}"
+    )
     print("[OK] SMART-PET CHECKPOINT AUDIT PASSED")
 
 

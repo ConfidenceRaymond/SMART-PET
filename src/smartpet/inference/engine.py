@@ -16,7 +16,8 @@ from smartpet.inference.domains import (
 )
 from smartpet.inference.outputs import prediction_identifier
 from smartpet.inference.sliding_window import predict_volume
-from smartpet.models import OUTPUT_MODES, SmartPETGenerator
+from smartpet.inference.weights import SUPPORTED_INFERENCE_WEIGHTS_FORMATS
+from smartpet.models import OUTPUT_MODES, SmartPETGenerator, normalize_architecture_config
 from smartpet.training.precision import PrecisionPolicy, resolve_precision
 
 _REQUIRED_INFERENCE_CONFIG = (
@@ -46,12 +47,21 @@ def _inference_config(payload: dict[str, Any], path: Path) -> dict[str, Any]:
             f"expected one of {sorted(allowed_types)}"
         )
     format_version = int(payload.get("format_version", 0))
-    minimum_format = 4 if artifact_type == "smartpet_training_checkpoint" else 1
-    if format_version < minimum_format:
-        raise RuntimeError(
-            f"{path} format_version={format_version} predates the supported "
-            f"{artifact_type} format {minimum_format}"
-        )
+    if artifact_type == "smartpet_training_checkpoint":
+        if format_version < 4:
+            raise RuntimeError(
+                f"{path} format_version={format_version} predates the supported "
+                "smartpet_training_checkpoint format 4"
+            )
+        allow_v030_architecture = True
+    else:
+        if format_version not in SUPPORTED_INFERENCE_WEIGHTS_FORMATS:
+            raise RuntimeError(
+                f"{path} has unsupported inference weights format_version={format_version}; "
+                f"expected one of {SUPPORTED_INFERENCE_WEIGHTS_FORMATS}"
+            )
+        allow_v030_architecture = format_version == 1
+
     raw = payload.get("config")
     if not isinstance(raw, dict):
         raise RuntimeError(f"{path} does not contain a valid configuration mapping")
@@ -61,9 +71,16 @@ def _inference_config(payload: dict[str, Any], path: Path) -> dict[str, Any]:
             f"{path} is missing inference-critical configuration fields: {missing}. "
             "SMART-PET will not guess values that determine architecture or SUV scaling."
         )
+    try:
+        architecture = normalize_architecture_config(
+            raw,
+            allow_v030_defaults=allow_v030_architecture,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{path} has invalid architecture configuration: {exc}") from exc
     if not payload.get("generator_state"):
         raise RuntimeError(f"{path} contains no generator_state")
-    return dict(raw)
+    return {**raw, **architecture}
 
 
 class InferenceEngine:
@@ -141,6 +158,12 @@ class InferenceEngine:
             int(config["base_channels"]),
             attention_levels=attention_levels,
             output_mode=self.output_mode,
+            similarity_mode=str(config["similarity_mode"]),
+            encoder_convs_per_level=int(config["encoder_convs_per_level"]),
+            channel_spatial_input_projection=bool(
+                config["channel_spatial_input_projection"]
+            ),
+            generator_spectral_norm=bool(config["generator_spectral_norm"]),
         ).to(self.device)
         self.model.load_state_dict(raw["generator_state"], strict=True)
         self.model.eval()
