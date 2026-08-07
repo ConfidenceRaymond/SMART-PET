@@ -42,6 +42,7 @@ smartpet-export-weights = "smartpet.cli.export_weights:main"
 smartpet-audit-weights = "smartpet.cli.audit_weights:main"
 smartpet-convert-legacy-checkpoint = "smartpet.cli.convert_legacy_checkpoint:main"
 smartpet-audit-inference = "smartpet.cli.audit_inference:main"
+smartpet-conformance = "smartpet.cli.conformance:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -54,7 +55,7 @@ cache_dir = "work/cache/pytest"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = ["work", "build", "dist"]
+exclude = ["work", "build", "dist", "reference/legacy/source"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

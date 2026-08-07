@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "smartpet-legacy-model_pl_l1-uploaded-2026-08-06",
+  "generator": {
+    "class": "generator",
+    "base_channels": 32,
+    "encoder_levels": 7,
+    "encoder_conv3d_counts": [2, 2, 2, 2, 2, 2, 2],
+    "attention_config": "SSAM4",
+    "attention_levels": [2, 3],
+    "attention_feature_sizes_for_128_cube": [16, 8],
+    "declared_but_inactive_attention_feature_size": 4,
+    "spectral_normalization": "encoder convolutions and decoder transposed convolutions",
+    "output_head": "ConvTranspose3d",
+    "output_activation": "Tanh"
+  },
+  "attention": {
+    "composition": "self_attention + similarity_attention + channel_spatial_attention, then Conv3d",
+    "self_attention": "shared query/key Conv3d module with plane and depth paths; residual gamma initialized to zero",
+    "similarity_statistic": "variance-squared Equation 4; Gaussian window constructor hard-codes sigma=1.5",
+    "similarity_equation5_wiring": "both convolutions receive the similarity map",
+    "channel_spatial_conv1x1_feature_branch": true,
+    "outer_ssam_feature_multiplication": true
+  },
+  "discriminator": {
+    "class": "adversary",
+    "spectral_normalization": "three active discriminator blocks",
+    "final_activation": "Sigmoid",
+    "declared_unused_block": "adv_4_0",
+    "active_final_input": "adv3"
+  },
+  "training": {
+    "optimizer": "Adam",
+    "learning_rate": 0.0002,
+    "betas": [0.5, 0.999],
+    "lambda_adv": 0.005,
+    "lambda_pixel": 0.01,
+    "gan_loss_default": "BCEWithLogitsLoss with randomized smoothing and approximately 7 percent label reversal",
+    "generator_gan_input": "concatenated low-dose and standard-dose real pair",
+    "vgg_term": "slice-wise VGG19 feature L1 evaluated under no_grad and converted to Python/NumPy scalar",
+    "effective_generator_gradient": "0.01 * L1"
+  },
+  "preprocessing": {
+    "train_validation_test": "TorchIO ZNormalization followed by independent RescaleIntensity([-1, 1])",
+    "inverse_scaling": "uses the corresponding standard-dose target maximum",
+    "split_parser": "eval on split-file entries"
+  },
+  "source_locations": {
+    "generator_topology": "reference/legacy/source/model16_8.py:24-160",
+    "discriminator_topology": "reference/legacy/source/model16_8.py:163-190",
+    "encoder_decoder_blocks": "reference/legacy/source/NetBlocks.py:9-101",
+    "attention_placement": "reference/legacy/source/model16_8.py:62-70,113-126",
+    "ssam4_composition": "reference/legacy/source/Attns.py:208-258",
+    "similarity_wiring": "reference/legacy/source/Attns.py:180-205",
+    "channel_spatial_branch": "reference/legacy/source/Attns.py:115-175",
+    "self_similarity_formula": "reference/legacy/source/SSIMattn.py:94-141",
+    "active_training_loss": "reference/legacy/source/main16_8.py:146-163",
+    "vgg_detachment": "reference/legacy/source/metrics.py:262-315",
+    "gan_loss": "reference/legacy/source/losses_.py:11-49",
+    "hyperparameters": "reference/legacy/source/param.py:28-44",
+    "preprocessing": "reference/legacy/source/dataset.py:118-161",
+    "inverse_scaling": "reference/legacy/source/dataset.py:244-286",
+    "unsafe_split_parser": "reference/legacy/source/dataset.py:227-233",
+    "launcher_state": "reference/legacy/source/train16_8.py:11-24"
+  }
+}

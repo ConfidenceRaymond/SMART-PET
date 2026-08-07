@@ -1,0 +1,122 @@
+{
+  "execution_policy": "reference_only_do_not_import_or_execute",
+  "files": [
+    {
+      "path": "reference/legacy/source/Attns.py",
+      "role": "Historical self-attention, similarity-attention, channel-spatial attention, and SSAM composition.",
+      "sha256": "0c641b2edeb4fdf820345c1ac71c28e54417a11fa80b734a599b6423f6524ea2",
+      "size_bytes": 8607
+    },
+    {
+      "path": "reference/legacy/source/config.py",
+      "role": "Historical command-line configuration defaults.",
+      "sha256": "2e2e803a86dd60600a6413c569d07c25f2928de2e39db440c64194a3887ba1e6",
+      "size_bytes": 2597
+    },
+    {
+      "path": "reference/legacy/source/dataset.py",
+      "role": "Historical TorchIO dataset, patch sampling, normalization, inverse scaling, and save helpers.",
+      "sha256": "3919a3cca083a1e578a52a84cd3027215f3dca402f30d1a6193e88344758fde3",
+      "size_bytes": 18261
+    },
+    {
+      "path": "reference/legacy/source/losses_.py",
+      "role": "Historical GAN loss, label smoothing, label reversal, and auxiliary losses.",
+      "sha256": "2364c9ed16b78f7c945259d39b1a74595b4f36242d05bd67b45d4e0cafa45103",
+      "size_bytes": 8307
+    },
+    {
+      "path": "reference/legacy/source/main16_8.py",
+      "role": "Historical training, validation, testing, loss wiring, and optimization loop.",
+      "sha256": "759cf8d065e88a0c3a9da4669516bb44e38488267e99b4eafdf195b058d2568d",
+      "size_bytes": 14909
+    },
+    {
+      "path": "reference/legacy/source/metrics.py",
+      "role": "Historical image metrics and slice-wise VGG19 feature-L1 implementation named FID_vgg19.",
+      "sha256": "f12f177fa93485f20a55b7b85d5297c9585d71214dc2e471d1bf8184303ac7df",
+      "size_bytes": 17321
+    },
+    {
+      "path": "reference/legacy/source/metrics_orig.py",
+      "role": "Earlier historical metrics variant.",
+      "sha256": "714c94f786725c8cbab191d3620f73a25e9fe90047ecc18d320ff5402d7815d7",
+      "size_bytes": 17744
+    },
+    {
+      "path": "reference/legacy/source/misc.py",
+      "role": "Historical logging, scheduling, and reproducibility helpers.",
+      "sha256": "4e219f38c3766b8e4027d9f5ec15d301611aba5104b252d73be631202aae3bbc",
+      "size_bytes": 4028
+    },
+    {
+      "path": "reference/legacy/source/model16_8.py",
+      "role": "Historical generator and discriminator topology.",
+      "sha256": "953139698642403b4e2a3fd3e379314d28c046f7cf19364c77cb362ec4a84758",
+      "size_bytes": 7641
+    },
+    {
+      "path": "reference/legacy/source/model_pl_l1.sh",
+      "role": "Historical batch launcher for the model_pl_l1 branch.",
+      "sha256": "3f6f19f2497289eae07edadf1ae34e6260435156e79808775639daf19ec994cb",
+      "size_bytes": 295
+    },
+    {
+      "path": "reference/legacy/source/model_save.py",
+      "role": "Historical best-model selection and checkpoint naming implementation.",
+      "sha256": "e199c4d7203b815acca1e9a492db1d46782892889e0dc695ad1816b715a61062",
+      "size_bytes": 4306
+    },
+    {
+      "path": "reference/legacy/source/model_save22.py",
+      "role": "Alternative historical model-saving implementation.",
+      "sha256": "0b6a82fdcc917c39fb09d6bd0504e9b9cc1c7ad877472a5b7e62a2c06b4d4618",
+      "size_bytes": 3065
+    },
+    {
+      "path": "reference/legacy/source/NetBlocks.py",
+      "role": "Historical generator/discriminator building blocks and spectral normalization.",
+      "sha256": "8a5c2ccb33b26c6992c960176dca27ffb6ef48aa181d7bbe7de7048de46f23f9",
+      "size_bytes": 7020
+    },
+    {
+      "path": "reference/legacy/source/param.py",
+      "role": "Historical hyperparameters, attention configuration, optimizer, and path defaults.",
+      "sha256": "8178bfef6475de7ea89956a1ac71374b98c2d06f10b5560253bdfb69f220713d",
+      "size_bytes": 1869
+    },
+    {
+      "path": "reference/legacy/source/SSIMattn.py",
+      "role": "Historical 3D self-similarity statistic used by similarity attention.",
+      "sha256": "f610c17f982179788af93e5e76e28f25ee765e83e869d47192a62802ad4130b1",
+      "size_bytes": 4827
+    },
+    {
+      "path": "reference/legacy/source/train16_8.py",
+      "role": "Historical launcher selecting train or test action.",
+      "sha256": "bac9a4babed0a7b80c1d9eff96be378748c5d7389678c5dcdfb316fa0a16ae94",
+      "size_bytes": 483
+    },
+    {
+      "path": "reference/legacy/source/weights.py",
+      "role": "Historical model weight initialization helpers.",
+      "sha256": "0c750ad8ae30408a6d558566ec2b4be7bbb129cfc093296bd71bc6aa713f8c86",
+      "size_bytes": 2466
+    }
+  ],
+  "known_entry_points": {
+    "batch_launcher": "reference/legacy/source/model_pl_l1.sh",
+    "model_definition": "reference/legacy/source/model16_8.py",
+    "python_launcher": "reference/legacy/source/train16_8.py",
+    "training_loop": "reference/legacy/source/main16_8.py"
+  },
+  "limitations": [
+    "This snapshot records uploaded historical source files, not a complete environment lockfile.",
+    "The uploaded launcher currently invokes test mode, so it is evidence of file state rather than proof of the exact production invocation.",
+    "A separate historical ADVMSE training script was not present in the supplied snapshot."
+  ],
+  "schema_version": 1,
+  "snapshot_id": "smartpet-legacy-model_pl_l1-uploaded-2026-08-06",
+  "snapshot_purpose": "Immutable forensic reference for historical-versus-modern conformance analysis.",
+  "source_count": 17
+}

@@ -27,6 +27,30 @@ PYCHECK
 python -m pip install --no-build-isolation --no-deps -e .
 pytest --basetemp "$VALIDATION_TMP/pytest"
 python -m ruff check .
+sha256sum -c reference/legacy/SHA256SUMS.txt
+python - <<'PYLEGACY'
+import json
+from pathlib import Path
+
+manifest = json.loads(Path("reference/legacy/manifest.json").read_text(encoding="utf-8"))
+records = manifest.get("files")
+if manifest.get("schema_version") != 1 or not isinstance(records, list):
+    raise SystemExit("[STOP] Invalid legacy reference manifest")
+if len(records) != 17 or manifest.get("source_count") != 17:
+    raise SystemExit("[STOP] Legacy reference manifest must contain exactly 17 files")
+manifest_paths = {record.get("path") for record in records}
+source_paths = {
+    path.as_posix()
+    for path in Path("reference/legacy/source").iterdir()
+    if path.is_file()
+}
+if manifest_paths != source_paths:
+    raise SystemExit(
+        "[STOP] Legacy manifest/source mismatch: "
+        f"manifest_only={sorted(manifest_paths - source_paths)} "
+        f"source_only={sorted(source_paths - manifest_paths)}"
+    )
+PYLEGACY
 python - <<'PYUNSAFE'
 from pathlib import Path
 

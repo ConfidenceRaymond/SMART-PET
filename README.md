@@ -22,6 +22,7 @@ smartpet-audit-checkpoint    audit a full training checkpoint
 smartpet-export-weights      export inference-only generator weights
 smartpet-audit-weights       audit inference-only generator weights
 smartpet-audit-inference     audit an output NIfTI
+smartpet-conformance          verify historical-versus-modern conformance
 ```
 
 ## Installation
@@ -165,6 +166,7 @@ The baseline uses **combined SSAB3D**, consisting of axial self-attention, simil
 - [Reproducibility assets](docs/REPRODUCIBILITY.md)
 - [Evaluation](docs/EVALUATION.md)
 - [Changes from the paper](docs/CHANGES_FROM_PAPER.md)
+- [Historical conformance contract](docs/HISTORICAL_CONFORMANCE.md)
 - [Model card](docs/MODEL_CARD.md)
 - [Offline GitHub release](docs/GITHUB_RELEASE.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
