@@ -40,6 +40,29 @@ class AxialSelfAttention3D(nn.Module):
         return x + self.gamma * (depth + plane)
 
 
+def _box_average_3d(
+    x: torch.Tensor,
+    *,
+    kernel_size: int,
+    padding: int,
+) -> torch.Tensor:
+    """Deterministic grouped-convolution equivalent of AvgPool3d with padded zeros."""
+
+    if x.ndim != 5:
+        raise ValueError(f"Expected 5D tensor [B,C,D,H,W], got shape={tuple(x.shape)}")
+    if kernel_size <= 0 or kernel_size % 2 == 0:
+        raise ValueError("kernel_size must be a positive odd integer")
+    channels = int(x.shape[1])
+    divisor = float(kernel_size**3)
+    weight = torch.full(
+        (channels, 1, kernel_size, kernel_size, kernel_size),
+        1.0 / divisor,
+        dtype=x.dtype,
+        device=x.device,
+    )
+    return F.conv3d(x, weight, stride=1, padding=padding, groups=channels)
+
+
 def _gaussian_window_3d(
     kernel_size: int,
     sigma: float,
@@ -123,6 +146,17 @@ class SimilarityAttention3D(nn.Module):
                 padding=gate_padding,
             )
 
+    def _smooth_v030(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.are_deterministic_algorithms_enabled():
+            kernel_size = int(self.smooth.kernel_size)
+            padding = int(self.smooth.padding)
+            return _box_average_3d(
+                x,
+                kernel_size=kernel_size,
+                padding=padding,
+            )
+        return self.smooth(x)
+
     def _variance(self, x: torch.Tensor) -> torch.Tensor:
         window = self.window.to(device=x.device, dtype=x.dtype)
         mean = F.conv3d(x, window, padding=self.padding, groups=self.channels)
@@ -135,7 +169,7 @@ class SimilarityAttention3D(nn.Module):
                 f"Expected [B,{self.channels},D,H,W], got {tuple(x.shape)}"
             )
         if self.mode == "v030_luminance":
-            mean = self.smooth(x)
+            mean = self._smooth_v030(x)
             return (2.0 * x * mean + 1e-4) / (x.square() + mean.square() + 1e-4)
 
         variance = self._variance(x)
@@ -155,8 +189,8 @@ class SimilarityAttention3D(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         similarity = self.similarity_map(x)
         if self.mode == "v030_luminance":
-            mean = self.smooth(x)
-            variance = torch.clamp(self.smooth(x.square()) - mean.square(), min=0.0)
+            mean = self._smooth_v030(x)
+            variance = torch.clamp(self._smooth_v030(x.square()) - mean.square(), min=0.0)
             descriptor = torch.cat([similarity, torch.sqrt(variance + 1e-6)], dim=1)
             return x * torch.sigmoid(self.gate(descriptor))
         gate = torch.sigmoid(self.conv_similarity(similarity) + self.conv_feature(x))

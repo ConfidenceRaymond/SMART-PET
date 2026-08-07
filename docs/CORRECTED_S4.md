@@ -51,7 +51,9 @@ L1 objective.
 `similarity_mode` is one of:
 
 - `v030_luminance`: the exact v0.3.0 local luminance-like gate and state-dict
-  layout;
+  layout. Under strict deterministic execution, its parameter-free `AvgPool3d`
+  smoothing is evaluated by a mathematically equivalent grouped box convolution
+  because CUDA does not provide deterministic `avg_pool3d` backward;
 - `paper_exact`: the variance-squared Equation 4 as written in the article,
   with `c2 = (0.03 L)^2` derived from each sample/channel dynamic range;
 - `scale_consistent`: a dimensionally consistent SSIM contrast form comparing
