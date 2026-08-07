@@ -38,6 +38,20 @@ class PredictionResult:
 
 
 def _inference_config(payload: dict[str, Any], path: Path) -> dict[str, Any]:
+    artifact_type = payload.get("artifact_type")
+    allowed_types = {"smartpet_training_checkpoint", "smartpet_inference_weights"}
+    if artifact_type not in allowed_types:
+        raise RuntimeError(
+            f"{path} has unsupported artifact_type={artifact_type!r}; "
+            f"expected one of {sorted(allowed_types)}"
+        )
+    format_version = int(payload.get("format_version", 0))
+    minimum_format = 4 if artifact_type == "smartpet_training_checkpoint" else 1
+    if format_version < minimum_format:
+        raise RuntimeError(
+            f"{path} format_version={format_version} predates the supported "
+            f"{artifact_type} format {minimum_format}"
+        )
     raw = payload.get("config")
     if not isinstance(raw, dict):
         raise RuntimeError(f"{path} does not contain a valid configuration mapping")

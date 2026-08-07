@@ -24,6 +24,16 @@ def audit_checkpoint(
         raise FileNotFoundError(checkpoint_path)
 
     checkpoint = safe_torch_load(checkpoint_path)
+    artifact_type = checkpoint.get("artifact_type")
+    if artifact_type != "smartpet_training_checkpoint":
+        raise RuntimeError(
+            "smartpet-audit-checkpoint accepts only full training checkpoints; "
+            f"artifact_type={artifact_type!r}. Use smartpet-audit-weights for "
+            "inference-only artifacts."
+        )
+    smartpet_version = str(checkpoint.get("smartpet_version", "")).strip()
+    if not smartpet_version:
+        raise RuntimeError("Training checkpoint is missing smartpet_version provenance")
     format_version = int(checkpoint.get("format_version", 0))
     if format_version < CHECKPOINT_FORMAT_VERSION:
         raise RuntimeError(
@@ -59,6 +69,11 @@ def audit_checkpoint(
     if expected_precision is not None and precision != expected_precision:
         raise RuntimeError(f"Expected precision={expected_precision}, found {precision}")
 
+    config = checkpoint.get("config")
+    if not isinstance(config, dict):
+        raise RuntimeError("Training checkpoint config must be a mapping")
+    if config.get("output_mode") is None:
+        raise RuntimeError("Training checkpoint config is missing output_mode")
     if not checkpoint.get("generator_state"):
         raise RuntimeError("Generator state is empty")
     if not checkpoint.get("discriminator_state"):
@@ -100,6 +115,8 @@ def audit_checkpoint(
 
     return {
         "checkpoint": str(checkpoint_path),
+        "artifact_type": artifact_type,
+        "smartpet_version": smartpet_version,
         "format_version": format_version,
         "global_step": global_step,
         "world_size": world_size,
@@ -110,7 +127,7 @@ def audit_checkpoint(
         "epoch_complete": bool(checkpoint.get("epoch_complete", True)),
         "batch_in_epoch": int(checkpoint.get("batch_in_epoch", 0)),
         "samples_seen": int(checkpoint.get("samples_seen", 0)),
-        "output_mode": str(checkpoint.get("config", {}).get("output_mode", "linear")),
+        "output_mode": str(config["output_mode"]),
         "metrics_last": metrics_last,
     }
 
@@ -149,6 +166,8 @@ def main() -> None:
         expected_world_size=args.expected_world_size,
         expected_precision=args.expected_precision,
     )
+    print(f"[OK] artifact_type={result['artifact_type']}")
+    print(f"[OK] smartpet_version={result['smartpet_version']}")
     print(f"[OK] checkpoint format_version={result['format_version']}")
     print(f"[OK] global_step={result['global_step']}")
     print(f"[OK] world_size={result['world_size']}")

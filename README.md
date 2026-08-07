@@ -19,6 +19,8 @@ smartpet-infer               infer one whole volume
 smartpet-infer-batch         infer a CSV-defined cohort with one model load
 smartpet-evaluate            compute fixed-mask SUV metrics
 smartpet-audit-checkpoint    audit a full training checkpoint
+smartpet-export-weights      export inference-only generator weights
+smartpet-audit-weights       audit inference-only generator weights
 smartpet-audit-inference     audit an output NIfTI
 ```
 
@@ -110,7 +112,7 @@ smartpet-train \
   --out-dir /runs/new_finetune
 ```
 
-Fine-tuning loads model weights but resets optimizers, schedulers, progress, and RNG state. The parent checkpoint hash is recorded.
+Fine-tuning requires a full checkpoint containing both trained networks. It resets optimizers, schedulers, progress, and RNG state. Inference-only weights are rejected, and the parent checkpoint hash is recorded.
 
 ## Whole-volume inference
 
@@ -159,6 +161,8 @@ The baseline uses **combined SSAB3D**, consisting of axial self-attention, simil
 - [Fine-tuning](docs/FINETUNING.md)
 - [Inference](docs/INFERENCE.md)
 - [Checkpoint contract](docs/CHECKPOINTS.md)
+- [Legacy checkpoint conversion](docs/LEGACY_CHECKPOINT_CONVERSION.md)
+- [Reproducibility assets](docs/REPRODUCIBILITY.md)
 - [Evaluation](docs/EVALUATION.md)
 - [Changes from the paper](docs/CHANGES_FROM_PAPER.md)
 - [Model card](docs/MODEL_CARD.md)
@@ -182,7 +186,8 @@ available in the
 [SMART-PET v0.3.0 reproducibility assets folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
 
 Access is currently restricted to authorized reviewers. The repository does
-not automatically download these files. Verify all downloaded files against
-the included `SHA256SUMS.txt` before use.
+not automatically download these files. The private mirror is temporary; the
+public release will use an immutable citable archive and a Git-tracked SHA-256
+manifest.
 
 See [Reproducibility assets](docs/REPRODUCIBILITY.md) for the complete contract.

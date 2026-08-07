@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
+from smartpet import __version__
 from smartpet.checkpoint_io import safe_torch_load
 
 from .distributed import Runtime, unwrap
@@ -204,6 +205,7 @@ def save_checkpoint(
     payload = {
         "format_version": CHECKPOINT_FORMAT_VERSION,
         "artifact_type": "smartpet_training_checkpoint",
+        "smartpet_version": __version__,
         "epoch": int(epoch),
         "batch_in_epoch": int(batch_in_epoch),
         "epoch_complete": bool(epoch_complete),

@@ -1,6 +1,11 @@
-# Checkpoint contract
+# Checkpoint and weight contracts
 
-Full checkpoints use format version 3 and contain:
+SMART-PET deliberately separates two artifact types.
+
+## Full training checkpoints
+
+Full checkpoints use `artifact_type=smartpet_training_checkpoint` and format
+version 4. They contain:
 
 - generator and discriminator states;
 - both Adam optimizer states;
@@ -9,16 +14,44 @@ Full checkpoints use format version 3 and contain:
 - epoch, batch position, global step, and samples seen;
 - optimizer-update integrity counters;
 - rank-specific Python, NumPy, CPU Torch, and CUDA RNG states;
-- training configuration and precision policy;
+- training configuration, SMART-PET version, and precision policy;
 - current best validation metric.
 
-Use `smartpet-audit-checkpoint` before continuation. Do not store multi-gigabyte checkpoints directly in Git. Publish model weights through a release archive, Zenodo, Hugging Face, or institutional storage and record SHA-256 hashes.
+Use `smartpet-audit-checkpoint` before exact continuation or adversarial
+fine-tuning. Do not store multi-gigabyte checkpoints directly in Git.
 
-## Pretrained inference weights
+## Inference-only weights
 
-The reviewed inference-only epoch-4 weights are distributed outside Git:
+Inference exports use `artifact_type=smartpet_inference_weights` and their own
+format version. They contain only the generator state, inference-critical
+configuration, source-checkpoint digest, source step/epoch, and export version.
+They contain no discriminator, optimizer, scheduler, scaler, or RNG state.
 
-[SMART-PET v0.3.0 reproducibility assets](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link)
+Create them reproducibly:
 
-Verify the downloaded artifact using the accompanying `SHA256SUMS.txt`.
-See `docs/REPRODUCIBILITY.md` for its scope and use.
+```bash
+smartpet-export-weights \
+  --checkpoint /path/to/full_training_checkpoint.pt \
+  --output /path/to/smartpet_inference.pt \
+  --json-output /path/to/smartpet_inference.export.json
+```
+
+Audit them with the correct tool:
+
+```bash
+smartpet-audit-weights \
+  --weights /path/to/smartpet_inference.pt \
+  --expected-sha256 <SHA256>
+```
+
+Do not pass inference-only weights to `--resume` or `--init-checkpoint`.
+Adversarial fine-tuning requires a full checkpoint with a trained discriminator.
+
+## Legacy format-3 checkpoints
+
+Legacy format-3 checkpoints must be converted in a disposable isolated
+environment before use. See `docs/LEGACY_CHECKPOINT_CONVERSION.md`.
+
+Publish release weights through an immutable archive or institutional repository
+and commit the release SHA-256 manifest to Git. A mutable mirror may be offered
+for convenience but is not the authoritative integrity record.

@@ -27,6 +27,21 @@ PYCHECK
 python -m pip install --no-build-isolation --no-deps -e .
 pytest --basetemp "$VALIDATION_TMP/pytest"
 python -m ruff check .
+python - <<'PYUNSAFE'
+from pathlib import Path
+
+allowed = Path("src/smartpet/cli/convert_legacy_checkpoint.py")
+occurrences = []
+for path in Path("src").rglob("*.py"):
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if "weights_only=False" in line:
+            occurrences.append((path, number))
+violations = [(path, number) for path, number in occurrences if path != allowed]
+if violations:
+    raise SystemExit(f"[STOP] Unsafe torch.load outside legacy converter: {violations}")
+if not any(path == allowed for path, _ in occurrences):
+    raise SystemExit("[STOP] Legacy converter security boundary is missing")
+PYUNSAFE
 python - <<'PYSCAN'
 from pathlib import Path
 patterns = (

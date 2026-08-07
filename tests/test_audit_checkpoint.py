@@ -48,7 +48,7 @@ def _valid_run(tmp_path: Path) -> Path:
         epoch=0,
         global_step=1,
         runtime=Runtime(torch.device("cpu"), 0, 1, 0, False),
-        config={"backend": "single"},
+        config={"backend": "single", "output_mode": "positive_softplus_residual"},
         best_metric=0.5,
         precision={"resolved": "fp32"},
     )
@@ -87,7 +87,14 @@ def test_audit_accepts_consistent_checkpoint(tmp_path: Path) -> None:
 
 def test_audit_rejects_legacy_checkpoint(tmp_path: Path) -> None:
     path = tmp_path / "legacy.pt"
-    torch.save({"format_version": 1}, path)
+    torch.save(
+        {
+            "artifact_type": "smartpet_training_checkpoint",
+            "smartpet_version": "0.2.0",
+            "format_version": 1,
+        },
+        path,
+    )
     with pytest.raises(RuntimeError, match="predates the safe production"):
         audit_checkpoint(path)
 
@@ -101,3 +108,17 @@ def test_audit_refuses_pickle_code_execution(tmp_path: Path) -> None:
         audit_checkpoint(path)
 
     assert not marker.exists(), "checkpoint payload executed during audit"
+
+
+def test_training_audit_rejects_inference_weights_with_clear_tool_hint(tmp_path: Path) -> None:
+    path = tmp_path / "weights.pt"
+    torch.save(
+        {
+            "artifact_type": "smartpet_inference_weights",
+            "format_version": 1,
+            "smartpet_version": "0.3.0",
+        },
+        path,
+    )
+    with pytest.raises(RuntimeError, match="smartpet-audit-weights"):
+        audit_checkpoint(path)

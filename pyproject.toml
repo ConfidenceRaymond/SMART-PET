@@ -38,6 +38,9 @@ smartpet-infer-batch = "smartpet.cli.infer_batch:main"
 smartpet-evaluate = "smartpet.cli.evaluate:main"
 smartpet-validate-manifest = "smartpet.cli.validate_manifest:main"
 smartpet-audit-checkpoint = "smartpet.cli.audit_checkpoint:main"
+smartpet-export-weights = "smartpet.cli.export_weights:main"
+smartpet-audit-weights = "smartpet.cli.audit_weights:main"
+smartpet-convert-legacy-checkpoint = "smartpet.cli.convert_legacy_checkpoint:main"
 smartpet-audit-inference = "smartpet.cli.audit_inference:main"
 
 [tool.setuptools.packages.find]
