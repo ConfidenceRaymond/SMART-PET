@@ -21,10 +21,17 @@ class _WriteMarker:
         return exec, (statement,)
 
 
-def _legacy_payload() -> dict[str, object]:
+def _legacy_payload(*, record_attention_levels: bool = False) -> dict[str, object]:
+    config: dict[str, object] = {"output_mode": "positive_softplus_residual"}
+    if record_attention_levels:
+        config["attention_levels"] = [2, 3]
     return {
         "format_version": 3,
-        "generator_state": {"weight": torch.ones(1)},
+        "generator_state": {
+            "weight": torch.ones(1),
+            "attention.2.weight": torch.ones(1),
+            "attention.3.weight": torch.ones(1),
+        },
         "discriminator_state": {"weight": torch.ones(1)},
         "g_optimizer_state": {"state": {}, "param_groups": []},
         "d_optimizer_state": {"state": {}, "param_groups": []},
@@ -39,7 +46,7 @@ def _legacy_payload() -> dict[str, object]:
             }
         ],
         "world_size": 1,
-        "config": {"output_mode": "positive_softplus_residual"},
+        "config": config,
         "best_metric": 0.5,
     }
 
@@ -76,7 +83,38 @@ def test_converter_refuses_before_unsafe_load_on_hash_mismatch(tmp_path: Path) -
     assert not marker.exists(), "unsafe legacy payload executed before digest verification"
 
 
-def test_converter_rewrites_v3_rng_state_to_safe_v4(tmp_path: Path) -> None:
+def test_converter_requires_explicit_missing_attention_levels(tmp_path: Path) -> None:
+    source = tmp_path / "legacy.pt"
+    torch.save(_legacy_payload(), source)
+
+    with pytest.raises(RuntimeError, match="--attention-levels"):
+        convert_legacy_checkpoint(
+            source,
+            tmp_path / "converted.pt",
+            expected_sha256=sha256_file(source),
+            confirmation="I_UNDERSTAND_UNSAFE_PICKLE",
+        )
+
+
+def test_converter_rejects_attention_levels_that_disagree_with_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy.pt"
+    torch.save(_legacy_payload(), source)
+
+    with pytest.raises(RuntimeError, match="do not match generator_state"):
+        convert_legacy_checkpoint(
+            source,
+            tmp_path / "converted.pt",
+            expected_sha256=sha256_file(source),
+            confirmation="I_UNDERSTAND_UNSAFE_PICKLE",
+            attention_levels=(4,),
+        )
+
+
+def test_converter_rewrites_v3_rng_state_and_records_config_override(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "legacy.pt"
     output = tmp_path / "converted.pt"
     torch.save(_legacy_payload(), source)
@@ -86,12 +124,40 @@ def test_converter_rewrites_v3_rng_state_to_safe_v4(tmp_path: Path) -> None:
         output,
         expected_sha256=sha256_file(source),
         confirmation="I_UNDERSTAND_UNSAFE_PICKLE",
+        attention_levels=(2, 3),
     )
     converted = safe_torch_load(output)
 
     assert result["output_format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert result["attention_levels"] == [2, 3]
+    assert result["config_overrides"] == {"attention_levels": [2, 3]}
     assert converted["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert converted["artifact_type"] == "smartpet_training_checkpoint"
+    assert converted["config"]["attention_levels"] == [2, 3]
     assert isinstance(converted["rng_states"][0]["python"], dict)
     assert isinstance(converted["rng_states"][0]["numpy"], dict)
     assert converted["conversion"]["source_sha256"] == sha256_file(source)
+    assert converted["conversion"]["state_attention_levels"] == [2, 3]
+    assert converted["conversion"]["config_overrides"] == {
+        "attention_levels": [2, 3]
+    }
+
+
+def test_converter_accepts_recorded_attention_levels_without_override(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy.pt"
+    output = tmp_path / "converted.pt"
+    torch.save(_legacy_payload(record_attention_levels=True), source)
+
+    result = convert_legacy_checkpoint(
+        source,
+        output,
+        expected_sha256=sha256_file(source),
+        confirmation="I_UNDERSTAND_UNSAFE_PICKLE",
+    )
+    converted = safe_torch_load(output)
+
+    assert result["attention_levels"] == [2, 3]
+    assert result["config_overrides"] == {}
+    assert converted["conversion"]["config_overrides"] == {}

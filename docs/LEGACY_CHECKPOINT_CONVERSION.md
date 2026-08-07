@@ -17,6 +17,7 @@ smartpet-convert-legacy-checkpoint \
   --input /isolated/input/legacy_v0.3.0.pt \
   --output /isolated/output/converted_v4.pt \
   --expected-sha256 <SOURCE_SHA256> \
+  --attention-levels 2 3 \
   --confirmation I_UNDERSTAND_UNSAFE_PICKLE
 ```
 
@@ -24,9 +25,16 @@ The command:
 
 - verifies the supplied source SHA-256 before unsafe loading;
 - accepts only SMART-PET full checkpoints with `format_version=3`;
+- requires explicit `--attention-levels` when the legacy config omitted that
+  architecture field, verifies the supplied levels against attention-module keys
+  in `generator_state`, and records the override in conversion provenance;
 - converts Python and NumPy RNG state to primitive/tensor-only structures;
 - writes a new full checkpoint with `format_version=4`;
 - records the source digest and conversion metadata.
+
+Do not infer a missing architecture field from a modern default. Supply the
+known value from the historical run configuration and preserve it in the
+conversion record.
 
 After conversion, move only the converted file out of the isolated environment
 and run:

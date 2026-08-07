@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from smartpet.training.checkpoint import (
 )
 
 _CONFIRMATION = "I_UNDERSTAND_UNSAFE_PICKLE"
+_ATTENTION_KEY = re.compile(r"^(?:module\.)?attention\.(\d+)\.")
 _REQUIRED_FULL_FIELDS = (
     "generator_state",
     "discriminator_state",
@@ -29,6 +32,88 @@ _REQUIRED_FULL_FIELDS = (
     "config",
     "best_metric",
 )
+
+
+def _normalize_attention_levels(raw: Sequence[int]) -> tuple[int, ...]:
+    levels: list[int] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError("attention_levels must contain integers")
+        level = int(value)
+        if level < 0 or level > 6:
+            raise RuntimeError("attention_levels must contain values within [0, 6]")
+        levels.append(level)
+    normalized = tuple(levels)
+    if len(set(normalized)) != len(normalized):
+        raise RuntimeError("attention_levels must not contain duplicates")
+    return normalized
+
+
+def _state_attention_levels(raw: object) -> tuple[int, ...]:
+    if not isinstance(raw, Mapping):
+        raise RuntimeError("Legacy generator_state must be a mapping")
+    levels: set[int] = set()
+    for key in raw:
+        if not isinstance(key, str):
+            raise RuntimeError("Legacy generator_state keys must be strings")
+        match = _ATTENTION_KEY.match(key)
+        if match is not None:
+            levels.add(int(match.group(1)))
+    return tuple(sorted(levels))
+
+
+def _migrate_config(
+    raw_config: object,
+    generator_state: object,
+    *,
+    attention_levels: Sequence[int] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(raw_config, Mapping):
+        raise RuntimeError("Legacy checkpoint config must be a mapping")
+
+    config = dict(raw_config)
+    state_levels = _state_attention_levels(generator_state)
+    supplied_levels = (
+        None if attention_levels is None else _normalize_attention_levels(attention_levels)
+    )
+    recorded_raw = config.get("attention_levels")
+
+    overrides: dict[str, Any] = {}
+    if recorded_raw is None:
+        if supplied_levels is None:
+            raise RuntimeError(
+                "Legacy checkpoint config is missing 'attention_levels'. Supply the "
+                "known training architecture explicitly with --attention-levels; "
+                "SMART-PET will not guess architecture metadata during conversion."
+            )
+        if state_levels and supplied_levels != state_levels:
+            raise RuntimeError(
+                "Supplied attention_levels do not match generator_state: "
+                f"supplied={list(supplied_levels)}, state={list(state_levels)}"
+            )
+        config["attention_levels"] = list(supplied_levels)
+        overrides["attention_levels"] = list(supplied_levels)
+    else:
+        if not isinstance(recorded_raw, list | tuple):
+            raise RuntimeError("Legacy config attention_levels must be an array")
+        recorded_levels = _normalize_attention_levels(recorded_raw)
+        if supplied_levels is not None and supplied_levels != recorded_levels:
+            raise RuntimeError(
+                "Supplied attention_levels conflict with the value recorded in the "
+                f"legacy config: supplied={list(supplied_levels)}, "
+                f"recorded={list(recorded_levels)}"
+            )
+        if state_levels and recorded_levels != state_levels:
+            raise RuntimeError(
+                "Legacy config attention_levels do not match generator_state: "
+                f"recorded={list(recorded_levels)}, state={list(state_levels)}"
+            )
+        config["attention_levels"] = list(recorded_levels)
+
+    return config, {
+        "config_overrides": overrides,
+        "state_attention_levels": list(state_levels),
+    }
 
 
 def _convert_rng_state(raw: object, *, rank: int) -> dict[str, Any]:
@@ -62,6 +147,7 @@ def convert_legacy_checkpoint(
     *,
     expected_sha256: str,
     confirmation: str,
+    attention_levels: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Convert one explicitly trusted v3 checkpoint to the tensor-safe v4 contract.
 
@@ -108,10 +194,17 @@ def convert_legacy_checkpoint(
     if not isinstance(rng_states, list) or len(rng_states) != int(raw["world_size"]):
         raise RuntimeError("Legacy RNG state count does not match world_size")
 
+    migrated_config, migration_metadata = _migrate_config(
+        raw["config"],
+        raw["generator_state"],
+        attention_levels=attention_levels,
+    )
+
     converted = dict(raw)
     converted["format_version"] = CHECKPOINT_FORMAT_VERSION
     converted["artifact_type"] = "smartpet_training_checkpoint"
     converted["smartpet_version"] = str(raw.get("smartpet_version", "legacy-v0.3.0"))
+    converted["config"] = migrated_config
     converted["rng_states"] = [
         _convert_rng_state(state, rank=rank) for rank, state in enumerate(rng_states)
     ]
@@ -119,6 +212,7 @@ def convert_legacy_checkpoint(
         "converted_by_smartpet_version": __version__,
         "source_format_version": source_format,
         "source_sha256": actual,
+        **migration_metadata,
     }
     atomic_save(converted, output)
     return {
@@ -127,6 +221,8 @@ def convert_legacy_checkpoint(
         "source_sha256": actual,
         "source_format_version": source_format,
         "output_format_version": CHECKPOINT_FORMAT_VERSION,
+        "attention_levels": list(migrated_config["attention_levels"]),
+        "config_overrides": migration_metadata["config_overrides"],
     }
 
 
@@ -140,6 +236,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--expected-sha256", required=True)
+    p.add_argument(
+        "--attention-levels",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Explicit legacy generator attention levels, for example "
+            "--attention-levels 2 3. Required when the format-3 config omitted "
+            "this architecture field."
+        ),
+    )
     p.add_argument(
         "--confirmation",
         required=True,
@@ -155,11 +262,14 @@ def main() -> None:
         args.output,
         expected_sha256=args.expected_sha256,
         confirmation=args.confirmation,
+        attention_levels=args.attention_levels,
     )
     print(f"[OK] converted checkpoint: {Path(result['output']).resolve()}")
     print(f"[OK] source SHA-256: {result['source_sha256']}")
     print(f"[OK] output SHA-256: {result['output_sha256']}")
     print(f"[OK] output format_version={result['output_format_version']}")
+    print(f"[OK] attention_levels={result['attention_levels']}")
+    print(f"[OK] config_overrides={result['config_overrides']}")
     print("[OK] SMART-PET LEGACY CHECKPOINT CONVERSION PASSED")
 
 
