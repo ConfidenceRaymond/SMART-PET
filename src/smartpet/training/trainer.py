@@ -494,17 +494,19 @@ def run(config: TrainConfig) -> Path:
                 generator=raw_generator,
                 discriminator=raw_discriminator,
                 device=runtime.device,
+                require_discriminator=True,
             )
             checkpoint_config = checkpoint.get("config", {})
-            architecture_fields = ("base_channels", "attention_levels", "output_mode")
+            architecture_fields = (
+                "base_channels",
+                "attention_levels",
+                "output_mode",
+                "asinh_scale",
+            )
             current_config = asdict(config)
             mismatches: dict[str, tuple[Any, Any]] = {}
             for field in architecture_fields:
                 checkpoint_value = checkpoint_config.get(field)
-                if field == "attention_levels" and checkpoint_value is None:
-                    checkpoint_value = (2, 3)
-                if field == "output_mode" and checkpoint_value is None:
-                    checkpoint_value = "linear"
                 current_value = current_config[field]
                 if isinstance(checkpoint_value, list):
                     checkpoint_value = tuple(checkpoint_value)
@@ -567,6 +569,7 @@ def run(config: TrainConfig) -> Path:
                 d_scheduler=d_scheduler,
                 validate_optimizer_progress=True,
                 restore_rank_rng=runtime.rank,
+                require_discriminator=True,
             )
             checkpoint_config = checkpoint.get("config", {})
             checkpoint_world_size = int(checkpoint.get("world_size", 1))
@@ -605,8 +608,6 @@ def run(config: TrainConfig) -> Path:
             current_config = asdict(config)
             for field in compatibility_fields:
                 checkpoint_value = checkpoint_config.get(field)
-                if field == "output_mode" and checkpoint_value is None:
-                    checkpoint_value = "linear"
                 current_value = current_config.get(field)
                 if field in {"train_csv", "val_csv", "mni_reference"}:
                     checkpoint_value = str(Path(checkpoint_value).resolve())

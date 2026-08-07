@@ -12,6 +12,15 @@ from smartpet.training.checkpoint import save_checkpoint
 from smartpet.training.distributed import Runtime
 
 
+class _WriteMarker:
+    def __init__(self, marker: Path) -> None:
+        self.marker = marker
+
+    def __reduce__(self):
+        statement = f"open({str(self.marker)!r}, 'w', encoding='utf-8').write('executed')"
+        return exec, (statement,)
+
+
 def _step(model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> None:
     loss = sum(parameter.square().sum() for parameter in model.parameters())
     loss.backward()
@@ -79,5 +88,16 @@ def test_audit_accepts_consistent_checkpoint(tmp_path: Path) -> None:
 def test_audit_rejects_legacy_checkpoint(tmp_path: Path) -> None:
     path = tmp_path / "legacy.pt"
     torch.save({"format_version": 1}, path)
-    with pytest.raises(RuntimeError, match="predates optimizer-integrity"):
+    with pytest.raises(RuntimeError, match="predates the safe production"):
         audit_checkpoint(path)
+
+
+def test_audit_refuses_pickle_code_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "executed.txt"
+    path = tmp_path / "hostile.pt"
+    torch.save({"format_version": 4, "payload": _WriteMarker(marker)}, path)
+
+    with pytest.raises(RuntimeError, match="weights_only=True"):
+        audit_checkpoint(path)
+
+    assert not marker.exists(), "checkpoint payload executed during audit"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,7 @@ import nibabel as nib
 import numpy as np
 import torch
 
+from smartpet.checkpoint_io import safe_torch_load, sha256_file
 from smartpet.data.nifti import MNIContract, load_mni_volume, save_like
 from smartpet.inference.domains import (
     prepare_inference_input,
@@ -16,16 +16,16 @@ from smartpet.inference.domains import (
 )
 from smartpet.inference.outputs import prediction_identifier
 from smartpet.inference.sliding_window import predict_volume
-from smartpet.models import SmartPETGenerator
+from smartpet.models import OUTPUT_MODES, SmartPETGenerator
 from smartpet.training.precision import PrecisionPolicy, resolve_precision
 
-
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_REQUIRED_INFERENCE_CONFIG = (
+    "base_channels",
+    "attention_levels",
+    "output_mode",
+    "asinh_scale",
+    "patch_size",
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,21 @@ class PredictionResult:
     suv: np.ndarray
     negative_count: int
     prediction_id: str
+
+
+def _inference_config(payload: dict[str, Any], path: Path) -> dict[str, Any]:
+    raw = payload.get("config")
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"{path} does not contain a valid configuration mapping")
+    missing = [field for field in _REQUIRED_INFERENCE_CONFIG if raw.get(field) is None]
+    if missing:
+        raise RuntimeError(
+            f"{path} is missing inference-critical configuration fields: {missing}. "
+            "SMART-PET will not guess values that determine architecture or SUV scaling."
+        )
+    if not payload.get("generator_state"):
+        raise RuntimeError(f"{path} contains no generator_state")
+    return dict(raw)
 
 
 class InferenceEngine:
@@ -59,25 +74,33 @@ class InferenceEngine:
         if not self.mni_reference.is_file():
             raise FileNotFoundError(self.mni_reference)
 
-        raw = torch.load(self.checkpoint_path, map_location="cpu", weights_only=False)
-        config: dict[str, Any] = dict(raw.get("config", {}))
+        raw = safe_torch_load(self.checkpoint_path)
+        config = _inference_config(raw, self.checkpoint_path)
         self.config = config
-        resolved_scale = (
-            asinh_scale if asinh_scale is not None else config.get("asinh_scale", 1.0)
+
+        recorded_scale = float(config["asinh_scale"])
+        if recorded_scale <= 0:
+            raise ValueError("Checkpoint asinh_scale must be positive")
+        if asinh_scale is not None and float(asinh_scale) != recorded_scale:
+            raise RuntimeError(
+                "Requested asinh_scale does not match the checkpoint contract: "
+                f"requested={float(asinh_scale)}, checkpoint={recorded_scale}"
+            )
+        self.asinh_scale = recorded_scale
+
+        recorded_patch_size = tuple(int(v) for v in config["patch_size"])
+        if len(recorded_patch_size) != 3 or any(v <= 0 for v in recorded_patch_size):
+            raise ValueError(f"Invalid checkpoint patch_size={recorded_patch_size}")
+        self.patch_size = (
+            tuple(int(v) for v in patch_size) if patch_size is not None else recorded_patch_size
         )
-        self.asinh_scale = float(resolved_scale)
-        if self.asinh_scale <= 0:
-            raise ValueError("asinh_scale must be positive")
-        configured_patch_size = patch_size or config.get(
-            "patch_size", (128, 128, 128)
-        )
-        self.patch_size = tuple(int(v) for v in configured_patch_size)
-        configured_stride = stride or tuple(
-            max(1, value // 2) for value in self.patch_size
-        )
+        if len(self.patch_size) != 3 or any(v <= 0 for v in self.patch_size):
+            raise ValueError("patch_size must contain three positive integers")
+
+        configured_stride = stride or tuple(max(1, value // 2) for value in self.patch_size)
         self.stride = tuple(int(v) for v in configured_stride)
-        if any(v <= 0 for v in (*self.patch_size, *self.stride)):
-            raise ValueError("patch_size and stride must be positive")
+        if len(self.stride) != 3 or any(v <= 0 for v in self.stride):
+            raise ValueError("stride must contain three positive integers")
 
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -90,10 +113,18 @@ class InferenceEngine:
             device=self.device,
         )
         self.contract = MNIContract.from_reference(self.mni_reference)
-        self.output_mode = str(config.get("output_mode", "linear"))
-        attention_levels = tuple(int(v) for v in config.get("attention_levels", (2, 3)))
+
+        self.output_mode = str(config["output_mode"])
+        if self.output_mode not in OUTPUT_MODES:
+            raise RuntimeError(
+                f"Checkpoint output_mode={self.output_mode!r} is unsupported; "
+                f"expected {OUTPUT_MODES}"
+            )
+        attention_levels = tuple(int(v) for v in config["attention_levels"])
+        if len(set(attention_levels)) != len(attention_levels):
+            raise RuntimeError("Checkpoint attention_levels contains duplicate entries")
         self.model = SmartPETGenerator(
-            int(config.get("base_channels", 32)),
+            int(config["base_channels"]),
             attention_levels=attention_levels,
             output_mode=self.output_mode,
         ).to(self.device)

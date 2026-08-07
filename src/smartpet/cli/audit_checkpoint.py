@@ -6,8 +6,8 @@ import math
 from pathlib import Path
 from typing import Any
 
-import torch
-
+from smartpet.checkpoint_io import safe_torch_load
+from smartpet.training.checkpoint import CHECKPOINT_FORMAT_VERSION
 from smartpet.training.precision import optimizer_max_step
 
 
@@ -23,12 +23,12 @@ def audit_checkpoint(
     if not checkpoint_path.is_file():
         raise FileNotFoundError(checkpoint_path)
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint = safe_torch_load(checkpoint_path)
     format_version = int(checkpoint.get("format_version", 0))
-    if format_version < 2:
+    if format_version < CHECKPOINT_FORMAT_VERSION:
         raise RuntimeError(
-            f"Checkpoint format_version={format_version} predates optimizer-integrity "
-            "tracking and is not accepted for production resume."
+            f"Checkpoint format_version={format_version} predates the safe production "
+            f"format {CHECKPOINT_FORMAT_VERSION} and is not accepted for audit/resume."
         )
 
     global_step = int(checkpoint["global_step"])

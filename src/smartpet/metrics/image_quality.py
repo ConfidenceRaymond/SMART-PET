@@ -8,6 +8,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from smartpet.checkpoint_io import safe_torch_load
+
 _EPS = 1e-8
 
 
@@ -224,7 +226,7 @@ def legacy_vgg19_feature_l1(
     if not weights_path.is_file():
         raise FileNotFoundError(weights_path)
     model = vgg19(weights=None)
-    state: Any = torch.load(weights_path, map_location="cpu", weights_only=False)
+    state: Any = safe_torch_load(weights_path)
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if not isinstance(state, dict):

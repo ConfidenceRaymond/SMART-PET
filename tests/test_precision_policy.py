@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from smartpet.checkpoint_io import safe_torch_load
 from smartpet.models import PatchDiscriminator3D, SmartPETGenerator
 from smartpet.training.checkpoint import load_checkpoint, save_checkpoint
 from smartpet.training.distributed import Runtime
@@ -92,8 +93,8 @@ def test_checkpoint_records_and_validates_optimizer_updates(tmp_path: Path) -> N
         precision={"resolved": "fp32"},
     )
 
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    assert checkpoint["format_version"] == 3
+    checkpoint = safe_torch_load(path)
+    assert checkpoint["format_version"] == 4
     assert checkpoint["g_optimizer_updates"] == 1
     assert checkpoint["d_optimizer_updates"] == 1
     assert checkpoint["precision"]["resolved"] == "fp32"
