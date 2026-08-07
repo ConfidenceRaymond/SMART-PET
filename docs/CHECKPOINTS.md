@@ -17,8 +17,10 @@ version 4. They contain:
 - training configuration, SMART-PET version, and precision policy;
 - current best validation metric.
 
-Use `smartpet-audit-checkpoint` before exact continuation or adversarial
-fine-tuning. Do not store multi-gigabyte checkpoints directly in Git.
+Use `smartpet-audit-checkpoint` before state-complete continuation or adversarial
+fine-tuning. Bitwise restart equivalence additionally requires `deterministic=true`
+in both the checkpoint and the resumed run. Do not store multi-gigabyte
+checkpoints directly in Git.
 
 ## Inference-only weights
 

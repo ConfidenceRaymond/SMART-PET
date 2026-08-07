@@ -34,6 +34,7 @@
   "amp": true,
   "amp_dtype": "auto",
   "seed": 2023,
+  "deterministic": false,
   "resume": null,
   "init_checkpoint": null,
   "decay_start_epoch": 9,

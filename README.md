@@ -4,7 +4,7 @@
 
 ![SMART-PET production workflow](assets/smartpet_workflow.svg)
 
-SMART-PET v0.3.0 modernizes the published self-similarity-aware GAN concept with strict NIfTI geometry checks, deterministic paired-patch training, one-process-per-GPU DDP, exact checkpoint continuation, explicit fine-tuning, batch inference, and fixed-mask SUV evaluation.
+SMART-PET v0.3.0 modernizes the published self-similarity-aware GAN concept with strict NIfTI geometry checks, deterministic paired-patch training, one-process-per-GPU DDP, state-complete checkpoint continuation, explicit fine-tuning, batch inference, and fixed-mask SUV evaluation.
 
 > Research software only. The current baseline was selected on a validation split and is not an independently tested clinical model.
 >

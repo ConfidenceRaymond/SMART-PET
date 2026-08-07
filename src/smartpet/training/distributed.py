@@ -60,10 +60,18 @@ def setup(backend: str) -> Runtime:
     return Runtime(device, 0, 1, 0, False)
 
 
-def wrap(model: nn.Module, runtime: Runtime) -> nn.Module:
+def wrap(
+    model: nn.Module,
+    runtime: Runtime,
+    *,
+    broadcast_buffers: bool = False,
+) -> nn.Module:
     if not runtime.distributed:
         return model
-    kwargs = {"broadcast_buffers": False, "find_unused_parameters": False}
+    kwargs = {
+        "broadcast_buffers": bool(broadcast_buffers),
+        "find_unused_parameters": False,
+    }
     if runtime.device.type == "cuda":
         kwargs.update(device_ids=[runtime.local_rank], output_device=runtime.local_rank)
     return nn.parallel.DistributedDataParallel(model, **kwargs)

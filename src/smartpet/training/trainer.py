@@ -85,6 +85,7 @@ class TrainConfig:
     amp: bool = True
     amp_dtype: str = "auto"
     seed: int = 2023
+    deterministic: bool = False
     resume: str | None = None
     init_checkpoint: str | None = None
     decay_start_epoch: int = 9
@@ -119,13 +120,44 @@ def _checkpoint_architecture_value(config: dict[str, Any], field: str) -> Any:
     return value
 
 
+def _configure_determinism(enabled: bool) -> None:
+    if not enabled:
+        return
+    # cuBLAS reads this variable when its workspace is first created. Configure it
+    # before model execution so deterministic mode is a real runtime contract.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if hasattr(torch.backends, "cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+        if hasattr(torch.backends.cuda, "enable_flash_sdp"):
+            torch.backends.cuda.enable_flash_sdp(False)
+        if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+        if hasattr(torch.backends.cuda, "enable_math_sdp"):
+            torch.backends.cuda.enable_math_sdp(True)
+    torch.backends.cudnn.allow_tf32 = False
+
+
 def seed_all(seed: int, rank: int) -> None:
     value = int(seed) + 100_003 * int(rank)
     random.seed(value)
-    np.random.seed(value % (2**32 - 1))
+    np.random.seed(value % (2**32))
     torch.manual_seed(value)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(value)
+
+
+def _loader_seed(seed: int, rank: int, epoch: int, stream: int) -> int:
+    """Return a stable per-rank/per-epoch seed for DataLoader bookkeeping."""
+
+    return (
+        int(seed)
+        + 100_003 * int(rank)
+        + 1_000_003 * int(epoch)
+        + 10_000_019 * int(stream)
+    ) % (2**63 - 1)
 
 
 def _sha256(path: str | Path) -> str:
@@ -545,6 +577,7 @@ def run(config: TrainConfig) -> Path:
     if config.preview_selection not in PREVIEW_SELECTIONS:
         raise ValueError(f"Unsupported preview_selection={config.preview_selection!r}")
 
+    _configure_determinism(config.deterministic)
     runtime = setup(config.backend)
     try:
         seed_all(config.seed, runtime.rank)
@@ -583,6 +616,8 @@ def run(config: TrainConfig) -> Path:
             drop_last=False,
         )
         val_sampler = DistributedEvalSampler(val_set, runtime) if runtime.distributed else None
+        train_loader_generator = torch.Generator()
+        val_loader_generator = torch.Generator()
         train_loader = DataLoader(
             train_set,
             batch_size=config.batch_size,
@@ -591,6 +626,7 @@ def run(config: TrainConfig) -> Path:
             num_workers=config.num_workers,
             pin_memory=runtime.device.type == "cuda",
             persistent_workers=False,
+            generator=train_loader_generator,
         )
         val_loader = DataLoader(
             val_set,
@@ -600,6 +636,7 @@ def run(config: TrainConfig) -> Path:
             num_workers=config.num_workers,
             pin_memory=runtime.device.type == "cuda",
             persistent_workers=False,
+            generator=val_loader_generator,
         )
 
         raw_generator = SmartPETGenerator(
@@ -650,8 +687,12 @@ def run(config: TrainConfig) -> Path:
                     "Fine-tuning checkpoint architecture is incompatible with the current "
                     f"configuration: {mismatches}"
                 )
-        generator = wrap(raw_generator, runtime)
-        discriminator = wrap(raw_discriminator, runtime)
+        generator = wrap(raw_generator, runtime, broadcast_buffers=False)
+        discriminator = wrap(
+            raw_discriminator,
+            runtime,
+            broadcast_buffers=config.discriminator_spectral_norm,
+        )
         g_opt = torch.optim.Adam(
             generator.parameters(),
             lr=config.lr,
@@ -735,6 +776,7 @@ def run(config: TrainConfig) -> Path:
                 "initialization",
                 "residual_head_initialization",
                 "seed",
+                "deterministic",
                 "train_patch_mode",
                 "min_foreground_fraction",
                 "foreground_threshold",
@@ -746,6 +788,8 @@ def run(config: TrainConfig) -> Path:
                 current_value = current_config.get(field)
                 if field == "max_consecutive_scaler_skips" and checkpoint_value is None:
                     checkpoint_value = 20
+                if field == "deterministic" and checkpoint_value is None:
+                    checkpoint_value = False
                 if field in {"train_csv", "val_csv", "mni_reference"}:
                     checkpoint_value = str(Path(checkpoint_value).resolve())
                     current_value = str(Path(current_value).resolve())
@@ -788,6 +832,7 @@ def run(config: TrainConfig) -> Path:
             print(f"precision_requested={precision.requested}", flush=True)
             print(f"precision_resolved={precision.resolved}", flush=True)
             print(f"grad_scaler_enabled={scaler.is_enabled()}", flush=True)
+            print(f"deterministic={config.deterministic}", flush=True)
             print(f"gan_loss={config.gan_loss}", flush=True)
             print(f"initialization={config.initialization}", flush=True)
             print(
@@ -858,6 +903,9 @@ def run(config: TrainConfig) -> Path:
             epoch_scaler_skips = int(resumed_scaler_skips) if epoch == start_epoch else 0
             consumed_batches = resume_batch if epoch == start_epoch else 0
             epoch_start = time.monotonic()
+            train_loader_generator.manual_seed(
+                _loader_seed(config.seed, runtime.rank, epoch, stream=0)
+            )
 
             for batch_index, batch in enumerate(train_loader):
                 if batch_index < consumed_batches:
@@ -1034,6 +1082,9 @@ def run(config: TrainConfig) -> Path:
                 )
             epoch_complete = consumed_batches >= len(train_loader)
             train_metrics = _reduce_metric_sums(train_sums, train_batches, runtime)
+            val_loader_generator.manual_seed(
+                _loader_seed(config.seed, runtime.rank, epoch, stream=1)
+            )
             val_metrics = _validate(
                 generator=generator,
                 val_loader=val_loader,

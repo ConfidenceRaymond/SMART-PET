@@ -14,11 +14,13 @@ from smartpet.training.distributed import (
     fail_collectively,
     setup,
     validate_eval_partition,
+    wrap,
 )
 from smartpet.training.precision import optimizer_max_step
 from smartpet.training.trainer import (
     _backward_and_prepare_step,
     _finish_joint_optimizer_step,
+    _loader_seed,
     _record_scaler_skip,
 )
 
@@ -40,6 +42,32 @@ def _collective_failure_worker(rank: int, init_method: str, queue) -> None:
         dist.destroy_process_group()
 
 
+
+
+
+
+def _spectral_buffer_sync_worker(rank: int, init_method: str, queue) -> None:
+    dist.init_process_group(
+        backend="gloo",
+        init_method=init_method,
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=10),
+    )
+    runtime = Runtime(torch.device("cpu"), rank, 2, rank, True)
+    try:
+        torch.manual_seed(7)
+        module = torch.nn.utils.spectral_norm(torch.nn.Linear(4, 4, bias=False))
+        wrapped = wrap(module, runtime, broadcast_buffers=True)
+        if rank == 1:
+            module.weight_u.add_(1.0)
+        wrapped(torch.ones(1, 4))
+        local = module.weight_u.detach().clone()
+        gathered = [torch.empty_like(local) for _ in range(2)]
+        dist.all_gather(gathered, local)
+        queue.put((rank, torch.equal(gathered[0], gathered[1])))
+    finally:
+        dist.destroy_process_group()
 
 
 def test_ddp_setup_uses_explicit_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,6 +110,62 @@ def test_validation_partition_rejects_empty_rank() -> None:
     runtime = Runtime(torch.device("cpu"), 0, 4, 0, True)
     with pytest.raises(ValueError, match="3 subjects.*world_size is 4"):
         validate_eval_partition(3, runtime)
+
+
+def test_dataloader_generator_does_not_advance_global_torch_rng() -> None:
+    torch.manual_seed(1234)
+    before = torch.random.get_rng_state().clone()
+    generator = torch.Generator().manual_seed(_loader_seed(2023, 1, 4, stream=0))
+    loader = torch.utils.data.DataLoader(
+        torch.arange(4),
+        batch_size=1,
+        num_workers=0,
+        generator=generator,
+    )
+    iterator = iter(loader)
+    next(iterator)
+    after = torch.random.get_rng_state()
+    assert torch.equal(before, after)
+
+
+def test_dataloader_seed_is_rank_epoch_and_stream_specific() -> None:
+    seeds = {
+        _loader_seed(2023, rank, epoch, stream)
+        for rank in range(2)
+        for epoch in range(2)
+        for stream in range(2)
+    }
+    assert len(seeds) == 8
+    assert _loader_seed(2023, 0, 3, 0) != _loader_seed(2023, 1, 3, 0)
+
+
+def test_ddp_wrap_can_broadcast_spectral_norm_buffers(tmp_path: Path) -> None:
+    if not dist.is_available() or not dist.is_gloo_available():
+        pytest.skip("gloo distributed backend is unavailable")
+
+    rendezvous = tmp_path / "spectral-buffer-rendezvous"
+    context = mp.get_context("spawn")
+    queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_spectral_buffer_sync_worker,
+            args=(rank, f"file://{rendezvous}", queue),
+        )
+        for rank in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            pytest.fail("spectral buffer synchronization test process hung")
+        assert process.exitcode == 0
+
+    results = sorted(queue.get(timeout=2) for _ in range(2))
+    assert [rank for rank, _ in results] == [0, 1]
+    assert all(equal for _, equal in results)
 
 
 def test_collective_failure_reaches_every_cpu_rank(tmp_path: Path) -> None:

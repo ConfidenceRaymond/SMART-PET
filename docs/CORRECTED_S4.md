@@ -81,6 +81,10 @@ active discriminator convolution. Generator spectral normalization remains an
 explicit experimental switch and is disabled in the primary corrected profile
 until a controlled stability smoke test supports enabling it.
 
+Under DDP, discriminator buffer broadcast is enabled when spectral normalization
+is active so the power-iteration buffers remain rank-synchronized across
+checkpoint boundaries.
+
 ## Acceptance boundary
 
 Phase 2B changes architecture code and metadata contracts only. It does not

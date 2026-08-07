@@ -108,3 +108,10 @@ def test_repository_corrected_s4_profile_loads() -> None:
     assert config.channel_spatial_input_projection is True
     assert config.generator_spectral_norm is False
     assert config.discriminator_spectral_norm is True
+
+
+def test_maintained_configs_default_to_nondeterministic_runtime() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for name in ("train_from_scratch.json", "train_corrected_s4.json", "finetune.json"):
+        payload = json.loads((root / "configs" / name).read_text())
+        assert payload["deterministic"] is False

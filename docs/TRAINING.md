@@ -64,6 +64,10 @@ smartpet-train --config /path/to/original/config.json \
   --set epochs=50
 ```
 
-Exact resume restores both models, both optimizers, schedulers, scaler, global step, batch position, metric accumulators, and rank-specific RNG states. Architecture, data, precision, world size, and sampling-policy mismatches are rejected. `epochs` is the new total target, not an additional epoch count.
+Checkpoint continuation restores both models, both optimizers, schedulers, scaler, global step, batch position, metric accumulators, and rank-specific RNG states. Architecture, data, precision, world size, deterministic mode, and sampling-policy mismatches are rejected. `epochs` is the new total target, not an additional epoch count.
 
-`num_workers=0` is the conservative production default because it was the stable exact-resume configuration on Narval. Increase it only after a site-specific continuation smoke test.
+Set `deterministic=true` when bitwise restart equivalence is required. In this mode SMART-PET enables deterministic PyTorch algorithms, deterministic cuDNN, deterministic cuBLAS workspace configuration, disables TF32, and forces the math scaled-dot-product-attention backend. The default remains `false` because deterministic kernels can reduce throughput.
+
+DataLoader iterator bookkeeping uses dedicated per-rank/per-epoch generators, so creating an iterator during a mid-epoch restart does not advance the checkpointed model CPU RNG stream. When discriminator spectral normalization is enabled, DDP broadcasts discriminator buffers so the stateful spectral-normalization power-iteration buffers remain synchronized across ranks.
+
+`num_workers=0` remains the conservative production default. Increase it only after a site-specific continuation smoke test.
