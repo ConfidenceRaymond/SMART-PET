@@ -456,7 +456,7 @@ def _validate(
                 source = batch["source"].to(runtime.device, non_blocking=True)
                 target = batch["target"].to(runtime.device, non_blocking=True)
                 with autocast_context(precision, runtime.device):
-                    prediction = generator(source)
+                    prediction = unwrap(generator)(source)
                 prediction = prediction.float()
                 if not torch.isfinite(prediction).all():
                     local_error = "Validation prediction contains non-finite values"
@@ -691,7 +691,7 @@ def run(config: TrainConfig) -> Path:
         discriminator = wrap(
             raw_discriminator,
             runtime,
-            broadcast_buffers=config.discriminator_spectral_norm,
+            broadcast_buffers=False,
         )
         g_opt = torch.optim.Adam(
             generator.parameters(),
@@ -921,8 +921,24 @@ def run(config: TrainConfig) -> Path:
                 with autocast_context(precision, runtime.device):
                     with torch.no_grad():
                         fake_for_d = unwrap(generator)(source)
-                    real_logits = discriminator(source, target)
-                    fake_logits = discriminator(source, fake_for_d)
+
+                    # One DDP discriminator forward per discriminator update.
+                    #
+                    # Calling the same DDP module twice before one backward can
+                    # prepare the reducer twice and expose collective-order
+                    # mismatches across ranks. InstanceNorm3d is per-sample, so
+                    # real/fake examples can safely be concatenated here.
+                    batch_n = int(source.shape[0])
+                    discriminator_source = torch.cat((source, source), dim=0)
+                    discriminator_candidate = torch.cat((target, fake_for_d), dim=0)
+
+                    discriminator_logits = discriminator(
+                        discriminator_source,
+                        discriminator_candidate,
+                    )
+                    real_logits = discriminator_logits[:batch_n]
+                    fake_logits = discriminator_logits[batch_n:]
+
                     d_real = adversarial(real_logits, torch.ones_like(real_logits))
                     d_fake = adversarial(fake_logits, torch.zeros_like(fake_logits))
                     d_loss = 0.5 * (d_real + d_fake)
