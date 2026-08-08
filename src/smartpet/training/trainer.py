@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from smartpet import __version__
 from smartpet.data.dataset import PairedMNIPatchDataset
+from smartpet.data.nifti import MNIContract, load_mni_volume
 from smartpet.metrics import image_quality_metrics
 from smartpet.models import (
     ARCHITECTURE_CONFIG_FIELDS,
@@ -95,6 +96,8 @@ class TrainConfig:
     keep_step_checkpoints: int = 2
     log_every_steps: int = 25
     asinh_scale: float = 1.0
+    validation_brain_mask: str | None = None
+    selection_metric: str = "val_l1_normalized"
     output_mode: str = "positive_softplus_residual"
     initialization: str = "normal_0.02"
     residual_head_initialization: str = "zero_identity"
@@ -436,6 +439,192 @@ def _save_progress_checkpoint(
     barrier(runtime)
 
 
+
+def _load_center_validation_mask(
+    config: TrainConfig,
+    runtime: Runtime,
+) -> torch.Tensor | None:
+    """Load the fixed full-MNI mask and crop the exact validation center patch."""
+    if config.validation_brain_mask is None:
+        return None
+
+    if config.val_patch_mode != "center":
+        raise ValueError(
+            "validation_brain_mask requires val_patch_mode='center'; "
+            "the mask crop must correspond exactly to the validation patch"
+        )
+
+    contract = MNIContract.from_reference(config.mni_reference)
+    _, mask_array = load_mni_volume(
+        config.validation_brain_mask,
+        contract,
+    )
+
+    mask = np.asarray(mask_array, dtype=np.float32) > 0.5
+
+    if mask.ndim != 3:
+        raise ValueError(
+            f"validation brain mask must be 3D, got shape={mask.shape}"
+        )
+
+    if any(
+        int(patch) > int(size)
+        for size, patch in zip(
+            mask.shape,
+            config.patch_size,
+            strict=True,
+        )
+    ):
+        raise ValueError(
+            "validation patch is larger than the validation brain mask grid: "
+            f"mask={mask.shape}, patch={config.patch_size}"
+        )
+
+    origin = tuple(
+        (int(size) - int(patch)) // 2
+        for size, patch in zip(
+            mask.shape,
+            config.patch_size,
+            strict=True,
+        )
+    )
+    slices = tuple(
+        slice(start, start + int(width))
+        for start, width in zip(
+            origin,
+            config.patch_size,
+            strict=True,
+        )
+    )
+
+    patch_mask = np.ascontiguousarray(
+        mask[slices],
+        dtype=np.float32,
+    )
+
+    expected_shape = tuple(int(v) for v in config.patch_size)
+    if patch_mask.shape != expected_shape:
+        raise RuntimeError(
+            "validation-mask crop shape mismatch: "
+            f"{patch_mask.shape} != {expected_shape}"
+        )
+
+    mask_voxels = int(patch_mask.sum())
+    if mask_voxels < 16:
+        raise ValueError(
+            "validation brain-mask center patch contains fewer than "
+            f"16 voxels: {mask_voxels}"
+        )
+
+    tensor = torch.from_numpy(patch_mask)[None, None].to(
+        runtime.device,
+        non_blocking=False,
+    )
+
+    if runtime.is_main:
+        print(
+            "validation_brain_mask="
+            f"{Path(config.validation_brain_mask).resolve()}",
+            flush=True,
+        )
+        print(
+            f"validation_mask_center_origin={origin}",
+            flush=True,
+        )
+        print(
+            f"validation_mask_patch_voxels={mask_voxels}",
+            flush=True,
+        )
+
+    return tensor
+
+
+def _masked_suv_validation_metrics(
+    prediction_suv: torch.Tensor,
+    target_suv: torch.Tensor,
+    validation_mask: torch.Tensor,
+) -> dict[str, float]:
+    """Return macro-ready per-subject quantitative SUV metrics."""
+    if prediction_suv.shape != target_suv.shape:
+        raise ValueError(
+            "prediction/target SUV shape mismatch: "
+            f"{tuple(prediction_suv.shape)} != "
+            f"{tuple(target_suv.shape)}"
+        )
+
+    if prediction_suv.ndim != 5:
+        raise ValueError(
+            "masked SUV validation expects [B,C,D,H,W], got "
+            f"{tuple(prediction_suv.shape)}"
+        )
+
+    expected_mask_shape = (
+        1,
+        1,
+        *tuple(int(v) for v in prediction_suv.shape[2:]),
+    )
+    if tuple(validation_mask.shape) != expected_mask_shape:
+        raise ValueError(
+            "validation mask shape mismatch: "
+            f"{tuple(validation_mask.shape)} != "
+            f"{expected_mask_shape}"
+        )
+
+    mask = validation_mask.to(
+        device=prediction_suv.device,
+        dtype=prediction_suv.dtype,
+    )
+
+    error = prediction_suv - target_suv
+    reduce_dims = (1, 2, 3, 4)
+
+    target_mass = (
+        target_suv.abs() * mask
+    ).sum(dim=reduce_dims)
+
+    if (
+        not torch.isfinite(target_mass).all()
+        or torch.any(target_mass <= 0)
+    ):
+        raise ValueError(
+            "masked SUV target denominator must be finite and positive"
+        )
+
+    nmae_pct = (
+        100.0
+        * (error.abs() * mask).sum(dim=reduce_dims)
+        / target_mass
+    )
+    signed_bias_pct = (
+        100.0
+        * (error * mask).sum(dim=reduce_dims)
+        / target_mass
+    )
+
+    if (
+        not torch.isfinite(nmae_pct).all()
+        or not torch.isfinite(signed_bias_pct).all()
+    ):
+        raise ValueError(
+            "masked SUV validation produced non-finite metrics"
+        )
+
+    # Each tensor contains one value per subject. Taking the batch mean
+    # here and weighting by batch_size in _validate yields a true
+    # subject-level macro-average over the complete validation cohort.
+    return {
+        "val_prediction_masked_nmae_pct_suv": float(
+            nmae_pct.mean().item()
+        ),
+        "val_prediction_masked_mean_suv_bias_pct_suv": float(
+            signed_bias_pct.mean().item()
+        ),
+        "val_prediction_masked_abs_mean_suv_bias_pct_suv": float(
+            signed_bias_pct.abs().mean().item()
+        ),
+    }
+
+
 def _validate(
     *,
     generator: nn.Module,
@@ -443,6 +632,7 @@ def _validate(
     config: TrainConfig,
     runtime: Runtime,
     precision,
+    validation_mask: torch.Tensor | None,
 ) -> dict[str, float]:
     generator.eval()
     sums: dict[str, float] = {}
@@ -470,12 +660,22 @@ def _validate(
                     break
                 pred_metrics = image_quality_metrics(prediction_suv, target_suv)
                 input_metrics = image_quality_metrics(source_suv, target_suv)
+
+                masked_metrics: dict[str, float] = {}
+                if validation_mask is not None:
+                    masked_metrics = _masked_suv_validation_metrics(
+                        prediction_suv,
+                        target_suv,
+                        validation_mask,
+                    )
+
                 batch_size = float(source.shape[0])
                 values = {
                     "val_l1_normalized": float(
                         nn.functional.l1_loss(prediction, target).item()
                     ),
                     "val_negative_fraction": negative,
+                    **masked_metrics,
                     **{
                         f"val_prediction_{key}_suv": value
                         for key, value in pred_metrics.items()
@@ -547,6 +747,35 @@ def run(config: TrainConfig) -> Path:
         raise ValueError("preview_every_epochs must be non-negative")
     if config.asinh_scale <= 0:
         raise ValueError("asinh_scale must be positive")
+
+    supported_selection_metrics = {
+        "val_l1_normalized",
+        "val_prediction_masked_nmae_pct_suv",
+    }
+    if config.selection_metric not in supported_selection_metrics:
+        raise ValueError(
+            f"Unsupported selection_metric={config.selection_metric!r}; "
+            f"expected one of {sorted(supported_selection_metrics)}"
+        )
+
+    if (
+        config.selection_metric
+        == "val_prediction_masked_nmae_pct_suv"
+        and not config.validation_brain_mask
+    ):
+        raise ValueError(
+            "selection_metric='val_prediction_masked_nmae_pct_suv' "
+            "requires validation_brain_mask"
+        )
+
+    if (
+        config.validation_brain_mask is not None
+        and config.val_patch_mode != "center"
+    ):
+        raise ValueError(
+            "validation_brain_mask currently requires "
+            "val_patch_mode='center'"
+        )
     if any(int(v) <= 0 for v in (*config.patch_size, *config.preview_stride)):
         raise ValueError("patch_size and preview_stride must contain positive integers")
     if levels:
@@ -607,6 +836,11 @@ def run(config: TrainConfig) -> Path:
             foreground_threshold=config.foreground_threshold,
         )
         validate_eval_partition(len(val_set), runtime)
+        validation_mask = _load_center_validation_mask(
+            config,
+            runtime,
+        )
+
         train_sampler = DistributedSampler(
             train_set,
             num_replicas=runtime.world_size,
@@ -772,6 +1006,8 @@ def run(config: TrainConfig) -> Path:
                 "grad_clip",
                 "max_consecutive_scaler_skips",
                 "asinh_scale",
+                "validation_brain_mask",
+                "selection_metric",
                 "decay_start_epoch",
                 "initialization",
                 "residual_head_initialization",
@@ -1107,8 +1343,14 @@ def run(config: TrainConfig) -> Path:
                 config=config,
                 runtime=runtime,
                 precision=precision,
+                validation_mask=validation_mask,
             )
-            selection_metric = val_metrics["val_l1_normalized"]
+            if config.selection_metric not in val_metrics:
+                raise RuntimeError(
+                    "Requested checkpoint-selection metric was not "
+                    f"produced by validation: {config.selection_metric}"
+                )
+            selection_metric = val_metrics[config.selection_metric]
             improved = selection_metric < best
             if improved:
                 best = selection_metric
@@ -1182,7 +1424,9 @@ def run(config: TrainConfig) -> Path:
                     "precision": precision.resolved,
                     "fp16_scaler_skipped_batches": epoch_scaler_skips,
                     "fp16_scaler_scale": scaler.get_scale() if scaler.is_enabled() else 1.0,
-                    "best_val_l1_normalized": best,
+                    "selection_metric_name": config.selection_metric,
+                    "selection_metric_value": selection_metric,
+                    "best_selection_metric": best,
                     **train_metrics,
                     **val_metrics,
                 }
