@@ -32,6 +32,7 @@ dev = ["pytest>=8", "ruff>=0.6", "build>=1.2"]
 paper-metrics = ["torchvision>=0.17"]
 
 [project.scripts]
+smartpet-prepare-external = "smartpet.cli.prepare_external:main"
 smartpet-train = "smartpet.cli.train:main"
 smartpet-infer = "smartpet.cli.infer:main"
 smartpet-infer-batch = "smartpet.cli.infer_batch:main"

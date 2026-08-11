@@ -12,7 +12,8 @@ venv/
 .vscode/
 .idea/
 .DS_Store
-work/
+work/*
+!work/README.md
 logs/
 slurm-*.out
 slurm-*.err

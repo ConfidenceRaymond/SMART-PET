@@ -194,3 +194,14 @@ public release will use an immutable citable archive and a Git-tracked SHA-256
 manifest.
 
 See [Reproducibility assets](docs/REPRODUCIBILITY.md) for the complete contract.
+
+<!-- SMARTPET_MODEL_PROVENANCE -->
+## Model provenance
+
+SMART-PET has distinct original and Lawson-adapted checkpoints with different
+validation status. The independently confirmed Lawson checkpoint is the
+15-epoch `1e-5` fine-tune; the newer constant-`3e-5` 100-epoch checkpoint is a
+development candidate and was not evaluated on the consumed locked Lawson-15.
+
+See [Model provenance](docs/MODEL_PROVENANCE.md) before selecting or reporting
+a checkpoint.
