@@ -1,207 +1,383 @@
 # SMART-PET
 
-**Production-grade 3D training, fine-tuning, evaluation, and whole-volume inference for paired brain PET restoration.**
+**SMART-PET reconstructs standard-dose brain PET from 10% low-dose PET using a self-similarity-aware 3D generative model.**
 
-![SMART-PET production workflow](assets/smartpet_workflow.svg)
+![SMART-PET qualitative reconstruction examples](assets/smartpet_qualitative_examples.png)
 
-SMART-PET v0.3.0 modernizes the published self-similarity-aware GAN concept with strict NIfTI geometry checks, deterministic paired-patch training, one-process-per-GPU DDP, state-complete checkpoint continuation, explicit fine-tuning, batch inference, and fixed-mask SUV evaluation.
+[**Published paper**](https://www.frontiersin.org/journals/nuclear-medicine/articles/10.3389/fnume.2024.1469490/full) ·
+[**Software**](https://github.com/ConfidenceRaymond/SMART-PET) ·
+[**Model weights**](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link)
 
-> Research software only. The current baseline was selected on a validation split and is not an independently tested clinical model.
+> **Research software.** SMART-PET is not a clinical diagnostic device.
 >
 > **License:** CC BY-NC-SA 4.0. Commercial use is prohibited.
 
-## Key commands
+## Overview
+
+SMART-PET is a 3D PET restoration framework for recovering standard-dose brain PET from low-dose PET.
+
+The current repository extends the method described in the 2024 SMART-PET paper with a reproducible PET preprocessing pathway, MNI-space patch training, whole-volume reconstruction, multi-GPU training, explicit fine-tuning, model auditing, and quantitative evaluation.
+
+The network receives PET images only. Clinical and acquisition metadata such as body weight, injected activity, age, sex, scanner, and tracer are not model inputs. Some of these fields are used during preprocessing when SUV conversion is required.
+
+The usual workflow is:
 
 ```text
-smartpet-validate-manifest   validate paired NIfTI geometry and intensity domain
-smartpet-train               train, exactly resume, or fine-tune
-smartpet-infer               infer one whole volume
-smartpet-infer-batch         infer a CSV-defined cohort with one model load
-smartpet-evaluate            compute fixed-mask SUV metrics
-smartpet-audit-checkpoint    audit a full training checkpoint
-smartpet-export-weights      export inference-only generator weights
-smartpet-audit-weights       audit inference-only generator weights
-smartpet-audit-inference     audit an output NIfTI
-smartpet-conformance          verify historical-versus-modern conformance
+PET images
+    ↓
+preprocess to MNI SUV / normalized MNI SUV
+    ↓
+train + validation CSV files
+    ↓
+validate data
+    ↓
+pretrained inference
+       or
+training / fine-tuning
+    ↓
+whole-volume prediction
+    ↓
+evaluation
 ```
 
-## Installation
+## Quick start
 
-Install a CUDA-enabled PyTorch build appropriate for the system, then:
+### 1. Install
+
+Install a CUDA-enabled PyTorch build appropriate for your system, then:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ConfidenceRaymond/SMART-PET.git
 cd SMART-PET
+
+python -m pip install -e .
+```
+
+For development and testing:
+
+```bash
 python -m pip install -e '.[dev]'
 pytest
 ```
 
-No code downloads model weights at runtime.
+SMART-PET does not download model weights automatically.
 
-For an offline cluster with dependencies already installed:
+Download the pretrained models from the
+[SMART-PET model folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
 
-```bash
-python -m pip install --no-build-isolation --no-deps -e .
-bash scripts/validate_release.sh
+### 2. Prepare data
+
+A clean project layout can look like this:
+
+```text
+data/
+├── raw/
+│   ├── sub-001/
+│   │   ├── lowdose.nii.gz
+│   │   └── standarddose.nii.gz
+│   └── sub-002/
+│       ├── lowdose.nii.gz
+│       └── standarddose.nii.gz
+│
+├── metadata.csv
+└── prepared/
 ```
 
-## Data CSV templates
+This layout is recommended, not required.
 
-Training and validation use:
+A flat folder is also supported:
+
+```text
+data/
+├── sub-001_lowdose.nii.gz
+├── sub-001_standarddose.nii.gz
+├── sub-002_lowdose.nii.gz
+├── sub-002_standarddose.nii.gz
+└── metadata.csv
+```
+
+SMART-PET uses the image paths in the CSV, so the images do not have to be reorganized into a particular folder hierarchy.
+
+Four preprocessing entry points are supported:
+
+| Input kind | Starting data | Processing performed |
+|---|---|---|
+| `raw_activity` | Calibrated activity PET outside MNI space | MNI registration → SUVbw → normalization |
+| `mni_activity` | Calibrated activity PET already in MNI space | SUVbw → normalization |
+| `mni_suv` | SUV PET already in MNI space | normalization |
+| `mni_suv_normalized` | SMART-PET normalized MNI SUV | validation and staging |
+
+If the images are already MNI SUV, the preprocessing CSV can be as simple as:
+
+```csv
+subject_id,source_image_path,target_image_path
+sub-001,raw/sub-001/lowdose.nii.gz,raw/sub-001/standarddose.nii.gz
+sub-002,raw/sub-002/lowdose.nii.gz,raw/sub-002/standarddose.nii.gz
+```
+
+Run:
+
+```bash
+smartpet-prepare-external \
+  --metadata-csv data/metadata.csv \
+  --data-root data \
+  --output-root data/prepared \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --input-kind mni_suv
+```
+
+SMART-PET writes prepared MNI SUV images, normalized images, preprocessing QC, and a model-ready paired manifest:
+
+```text
+data/prepared/manifests/pairs_normalized.csv
+```
+
+Starting from calibrated activity PET requires additional SUV metadata such as body weight and administered activity. See [Data preparation](docs/DATA_PREPARATION.md).
+
+### 3. Make CSV files
+
+Training and validation use three columns:
 
 ```csv
 subject_id,source_path,target_path
-train-001,/data/lowdose_normalized.nii.gz,/data/standard_normalized.nii.gz
+sub-001,/data/prepared/normalized/source/sub-001_source_norm.nii.gz,/data/prepared/normalized/target/sub-001_target_norm.nii.gz
+sub-002,/data/prepared/normalized/source/sub-002_source_norm.nii.gz,/data/prepared/normalized/target/sub-002_target_norm.nii.gz
 ```
 
-Batch inference uses:
+If you use `smartpet-prepare-external`, this format is generated automatically as `pairs_normalized.csv`.
 
-```csv
-subject_id,input_path,normalized_output,suv_output
-case-001,/data/lowdose_suv.nii.gz,/outputs/prediction_normalized.nii.gz,/outputs/prediction_suv.nii.gz
+Split the subjects into:
+
+```text
+data/train.csv
+data/validation.csv
 ```
 
-Complete templates are under `examples/`. Patient data and institution-specific manifests are intentionally excluded.
+Keep all scans belonging to the same participant in the same split.
 
-## Validate data
+Users who already have prepared normalized MNI PET can create the model-facing CSV files directly.
+
+Templates are available under [`examples/`](examples/).
+
+### 4. Validate
+
+Validate the image geometry, intensity domain, and train/validation separation before training:
 
 ```bash
 smartpet-validate-manifest \
-  --manifest /data/train.csv \
-  --mni-reference /data/reference.nii.gz
+  --manifest data/train.csv \
+  --other-manifest data/validation.csv \
+  --mni-reference /path/to/mni_reference.nii.gz
 ```
 
-Every source and target must be a finite scalar 3D NIfTI with the same canonical shape, affine, and voxel spacing as the reference.
+The validator rejects incompatible MNI geometry and subject overlap between the two splits.
+
+### 5. Run the pretrained model
+
+For general pretrained inference, use:
+
+```text
+smartpet_g001_parent_v0.3.1.pt
+```
+
+Download it from the
+[SMART-PET model folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
+
+Run whole-volume inference from MNI SUV:
+
+```bash
+mkdir -p outputs
+
+smartpet-infer \
+  --checkpoint /path/to/smartpet_g001_parent_v0.3.1.pt \
+  --input /path/to/lowdose_mni_suv.nii.gz \
+  --input-domain suv \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --suv-output outputs/prediction_suv.nii.gz \
+  --normalized-output outputs/prediction_normalized.nii.gz \
+  --metadata-json outputs/prediction.json
+```
+
+Use `--input-domain normalized` when the input already contains SMART-PET normalized MNI SUV.
+
+Whole-volume inference uses overlapping 128 × 128 × 128 patches and blends them into one output volume.
 
 ## Train from scratch
 
-Edit `configs/train_from_scratch.json`, then run on one GPU:
+The reference training configuration is:
 
-```bash
-smartpet-train --config configs/train_from_scratch.json --backend single
+```text
+configs/train_from_scratch.json
 ```
 
-Or on multiple GPUs on one node:
-
-```bash
-torchrun --standalone --nproc-per-node=2 -m smartpet.cli.train \
-  --config configs/train_from_scratch.json --backend ddp
-```
-
-`batch_size` is per rank. AMP `auto` uses BF16 when supported, otherwise FP16; CPU execution uses FP32.
-
-## Continue an interrupted run exactly
+Single GPU:
 
 ```bash
 smartpet-train \
-  --config /run/config.json \
-  --resume /run/checkpoints/last.pt \
-  --set epochs=50
+  --config configs/train_from_scratch.json \
+  --train-csv data/train.csv \
+  --val-csv data/validation.csv \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --out-dir runs/from_scratch \
+  --backend single
 ```
 
-Exact resume restores both networks, optimizers, schedulers, batch position, metric accumulators, and rank-specific RNG state. Incompatible continuation is rejected.
+Multiple GPUs on one node:
 
-## Fine-tune into a new run
+```bash
+torchrun --standalone --nproc-per-node=2 -m smartpet.cli.train \
+  --config configs/train_from_scratch.json \
+  --train-csv data/train.csv \
+  --val-csv data/validation.csv \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --out-dir runs/from_scratch \
+  --backend ddp
+```
+
+`batch_size` is specified per process.
+
+See [Training](docs/TRAINING.md) for configuration details and exact checkpoint continuation.
+
+## Fine-tune on your data
+
+Fine-tuning starts a new run from the **full G0.01-parent training checkpoint**:
+
+```text
+smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+```
+
+Download it from the [SMART-PET model folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link), then run:
 
 ```bash
 smartpet-train \
   --config configs/finetune.json \
-  --init-checkpoint /models/best.pt \
-  --train-csv /data/new_train.csv \
-  --val-csv /data/new_val.csv \
-  --mni-reference /data/reference.nii.gz \
-  --out-dir /runs/new_finetune
+  --init-checkpoint /path/to/smartpet_g001_parent_v0.3.1_full_checkpoint.pt \
+  --train-csv data/train.csv \
+  --val-csv data/validation.csv \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --out-dir runs/finetuned
 ```
 
-Fine-tuning requires a full checkpoint containing both trained networks. It resets optimizers, schedulers, progress, and RNG state. Inference-only weights are rejected, and the parent checkpoint hash is recorded.
+Fine-tuning resets optimizer, scheduler, progress, and RNG state while initializing both trained networks from the parent checkpoint.
 
-## Whole-volume inference
+The inference-only `.pt` files in the `weights/` folder are intended for inference and cannot be used with `--init-checkpoint`.
+
+The full parent checkpoint SHA-256 is:
+
+```text
+2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee
+```
+
+`configs/finetune.json` is an example configuration, not a claim that one learning rate is optimal for every dataset.
+
+See [Fine-tuning](docs/FINETUNING.md).
+
+## Evaluate
+
+Evaluate a paired prediction and target within a fixed brain mask:
 
 ```bash
-smartpet-infer \
-  --checkpoint /models/best.pt \
-  --input /data/lowdose_suv.nii.gz \
-  --input-domain suv \
-  --mni-reference /data/reference.nii.gz \
-  --normalized-output /outputs/prediction_normalized.nii.gz \
-  --suv-output /outputs/prediction_suv.nii.gz
+smartpet-evaluate \
+  --prediction outputs/prediction_suv.nii.gz \
+  --target /path/to/standarddose_mni_suv.nii.gz \
+  --brain-mask /path/to/brain_mask.nii.gz \
+  --mni-reference /path/to/mni_reference.nii.gz \
+  --prediction-domain suv \
+  --target-domain suv \
+  --output-json outputs/metrics.json
 ```
 
-Inference covers the complete image with overlapping 128³ windows and Hann-weighted blending. Normalized and SUV outputs come from the same forward pass.
+See [Evaluation](docs/EVALUATION.md) for metric definitions and the evaluation contract.
 
-## Batch inference
+## Pretrained models
 
-```bash
-smartpet-infer-batch \
-  --manifest examples/inference_manifest.csv \
-  --checkpoint /models/best.pt \
-  --mni-reference /data/reference.nii.gz \
-  --input-domain suv
+Public model files are available in the
+[SMART-PET model folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
+
+| Artifact | Intended use |
+|---|---|
+| `smartpet_g001_parent_v0.3.1.pt` | **Recommended general pretrained inference model** |
+| `smartpet_g001_external_adapted_v0.3.1.pt` | Domain-specific adapted inference model |
+| `smartpet_g001_parent_v0.3.1_full_checkpoint.pt` | Full parent checkpoint for fine-tuning |
+| `smartpet_v0.3.0_epoch4_inference.pt` | Historical v0.3.0 inference checkpoint |
+
+The recommended parent-model SHA-256 is:
+
+```text
+f26b89db433368167bb67242d0ed2e5351651a2155a92f41f6fce991649f91b0
 ```
 
-## Baseline validation result
+The external-adapted model SHA-256 is:
 
-Primary evaluation used inverse-transformed SUV and a fixed external whole-brain mask over all 103 validation subjects:
+```text
+aecd3b0c15f0b0b90fc6e2142412562ceacc7a5aacd440d37c3476e7dc89b797
+```
 
-| Model | SUV MAE ↓ | SUV NRMSE ↓ | SUV PSNR ↑ | SUV SSIM ↑ |
-|---|---:|---:|---:|---:|
-| D10 input | 0.26746 | 0.08477 | 28.454 dB | 0.87145 |
-| **Epoch 4** | **0.20008** | **0.06253** | **31.077 dB** | **0.92657** |
-| Epoch 34 | 0.21412 | 0.06747 | 30.379 dB | 0.91629 |
+Use the parent model for general inference. An adapted model should be used only when its target domain supports that choice.
 
-The earlier complete-grid result of 37.55 dB included substantial background and is therefore not directly comparable. It is retained as a secondary engineering metric, not the primary brain PET result.
+See [Model provenance](docs/MODEL_PROVENANCE.md).
 
-## Attention configuration
+## Expected data layout
 
-The frozen v0.3.0 baseline uses **combined SSAB3D**, consisting of axial self-attention, similarity attention, and channel-spatial attention. `attention_levels: [2, 3]` places SSAB blocks at the 16³ and 8³ encoder feature maps for a 128³ input. The v0.3.1 development branch adds explicit historical and corrected similarity modes, corrected Equation 5 wiring, configurable encoder depth, the restored channel-spatial input projection, and configurable spectral normalization. It is not a standalone “SAM4” model.
+A complete user workspace might look like:
+
+```text
+project/
+├── data/
+│   ├── raw/
+│   ├── prepared/
+│   ├── metadata.csv
+│   ├── train.csv
+│   └── validation.csv
+│
+├── models/
+│   └── smartpet_g001_parent_v0.3.1.pt
+│
+├── outputs/
+└── runs/
+```
+
+This is a recommended organization only.
+
+SMART-PET follows paths stored in CSV files and does not require a fixed filesystem layout.
+
+## What changed since the 2024 paper
+
+The 2024 article describes the original SMART-PET study. The current repository preserves that method lineage but adds a substantially more reproducible software and data workflow.
+
+Major additions include reproducible MNI/SUV preprocessing, reversible asinh normalization, overlapping 3D patch training, whole-volume reconstruction, single- and multi-GPU training, state-complete checkpoint continuation, explicit fine-tuning, batch inference, inference-weight export and auditing, and fixed-mask quantitative evaluation.
+
+The repository also contains explicit historical and corrected architecture modes used to document differences from the published implementation.
+
+See [Changes from the 2024 paper](docs/CHANGES_FROM_PAPER.md).
 
 ## Documentation
 
-- [Data contract](docs/DATA.md)
-- [Training and exact continuation](docs/TRAINING.md)
+Start here:
+
+- [Data preparation](docs/DATA_PREPARATION.md)
+- [Training](docs/TRAINING.md)
 - [Fine-tuning](docs/FINETUNING.md)
 - [Inference](docs/INFERENCE.md)
-- [Checkpoint contract](docs/CHECKPOINTS.md)
-- [Legacy checkpoint conversion](docs/LEGACY_CHECKPOINT_CONVERSION.md)
-- [Reproducibility assets](docs/REPRODUCIBILITY.md)
 - [Evaluation](docs/EVALUATION.md)
-- [Changes from the paper](docs/CHANGES_FROM_PAPER.md)
-- [Historical conformance contract](docs/HISTORICAL_CONFORMANCE.md)
-- [Corrected configurable S4](docs/CORRECTED_S4.md)
 - [Model card](docs/MODEL_CARD.md)
-- [Offline GitHub release](docs/GITHUB_RELEASE.md)
-- [Release checklist](docs/RELEASE_CHECKLIST.md)
-- [Release validation status](RELEASE_VALIDATION.md)
+- [Model provenance](docs/MODEL_PROVENANCE.md)
+- [Changes from the 2024 paper](docs/CHANGES_FROM_PAPER.md)
+
+Advanced checkpoint, historical-conformance, architecture, and release documentation remains under [`docs/`](docs/).
 
 ## Citation
 
-Please cite the published SMART-PET article described in `CITATION.cff`. The paper and supplementary material are not redistributed in this repository.
+If you use SMART-PET, please cite the published method:
+
+**SMART-PET**, *Frontiers in Nuclear Medicine* (2024)
+
+[Read the published article](https://www.frontiersin.org/journals/nuclear-medicine/articles/10.3389/fnume.2024.1469490/full)
+
+Repository citation metadata are provided in [`CITATION.cff`](CITATION.cff).
 
 ## License
 
-SMART-PET is licensed under **CC BY-NC-SA 4.0**. Commercial use is prohibited. See `LICENSE`.
+SMART-PET is released under the **CC BY-NC-SA 4.0** license.
 
-## Reproducibility assets
-
-The pretrained inference checkpoint, exact MNI preprocessing reference, fixed
-whole-brain evaluation mask, SHA-256 manifest, and third-party notices are
-available in the
-[SMART-PET v0.3.0 reproducibility assets folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
-
-Access is currently restricted to authorized reviewers. The repository does
-not automatically download these files. The private mirror is temporary; the
-public release will use an immutable citable archive and a Git-tracked SHA-256
-manifest.
-
-See [Reproducibility assets](docs/REPRODUCIBILITY.md) for the complete contract.
-
-<!-- SMARTPET_MODEL_PROVENANCE -->
-## Model provenance
-
-SMART-PET has distinct original and Lawson-adapted checkpoints with different
-validation status. The independently confirmed Lawson checkpoint is the
-15-epoch `1e-5` fine-tune; the newer constant-`3e-5` 100-epoch checkpoint is a
-development candidate and was not evaluated on the consumed locked Lawson-15.
-
-See [Model provenance](docs/MODEL_PROVENANCE.md) before selecting or reporting
-a checkpoint.
+Commercial use is prohibited. See [`LICENSE`](LICENSE) for the complete terms.

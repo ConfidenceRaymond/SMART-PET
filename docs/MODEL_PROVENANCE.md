@@ -1,99 +1,82 @@
 # SMART-PET model provenance
 
-This document distinguishes the original G0.01 model from Lawson-specific
-fine-tuned checkpoints. These models must not be treated as interchangeable.
+SMART-PET distributes a general parent model, a domain-specific adapted model,
+and a historical inference artifact. They should not be treated as
+interchangeable.
 
-## Model hierarchy
+## Public model hierarchy
 
-| Model | Role | Fine-tuning | Checkpoint SHA-256 | Confirmatory status |
-|---|---|---|---|---|
-| **G0.01-parent** | Original/internal reference model | None | `2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee` | Original reference |
-| **G0.01-Lawson-15ep-1e-5** | Independently confirmed Lawson-specific model | 15 epochs, initial LR `1e-5`, 52 train / 8 validation | `17026f7bda6c0023f886a67a88775f6dee8007526f6ab67e7f5f853fc9b30499` | **Confirmed on locked Lawson-15** |
-| **G0.01-Lawson-3e-5** | Newer Lawson development candidate | 100 epochs, constant LR `3e-5`, 52 train / 8 validation | `504e3b4f30f7b25535a22b8d2844a43dcc8895d7201804627404376733e0be22` | **Development only; not independently tested** |
+| Public model | Role | Training status | Source checkpoint SHA-256 |
+|---|---|---|---|
+| **G0.01-parent** | General pretrained model | Original reference model | `2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee` |
+| **G0.01-external-adapted** | Domain-specific adapted model | 15-epoch fine-tune from G0.01-parent, initial LR `1e-5` | `17026f7bda6c0023f886a67a88775f6dee8007526f6ab67e7f5f853fc9b30499` |
+| **v0.3.0 epoch-4 historical** | Historical inference reference | Earlier v0.3.0 release artifact | See release SHA-256 manifest |
 
-## Independently confirmed Lawson model
+The public v0.3.1 inference artifacts are:
 
-The one-shot independent Lawson evaluation used
-**G0.01-Lawson-15ep-1e-5**, not G0.01-Lawson-3e-5.
+```text
+G0.01-parent
+smartpet_g001_parent_v0.3.1.pt
+SHA-256: f26b89db433368167bb67242d0ed2e5351651a2155a92f41f6fce991649f91b0
 
-Primary endpoint:
+G0.01-external-adapted
+smartpet_g001_external_adapted_v0.3.1.pt
+SHA-256: aecd3b0c15f0b0b90fc6e2142412562ceacc7a5aacd440d37c3476e7dc89b797
+```
 
-- cohort: 15 previously locked independent Lawson subjects;
-- metric: brain-masked, unclipped physical-SUV NMAE;
-- comparison: Lawson fine-tuned minus G0.01-parent;
-- G0.01-parent mean NMAE: `13.3407%`;
-- G0.01-Lawson-15ep-1e-5 mean NMAE: `10.8344%`;
+The parent full checkpoint used for public fine-tuning is:
+
+```text
+smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+SHA-256: 2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee
+```
+
+## External adaptation result
+
+The released external-adapted checkpoint was evaluated once on a previously
+locked 15-subject external cohort.
+
+For brain-masked, unclipped physical-SUV NMAE:
+
+- parent mean NMAE: `13.3407%`;
+- adapted mean NMAE: `10.8344%`;
 - mean paired difference: `-2.5063` percentage points;
-- bootstrap 95% CI: `[-2.9734, -2.0770]` percentage points;
-- subject wins: `15/15`;
+- bootstrap 95% CI: `[-2.9734, -2.0770]`;
+- adapted model improved all `15/15` subjects;
 - exact sign-flip two-sided p-value: `6.1035e-05`.
 
-The preregistered external-superiority criterion passed.
+The external-superiority criterion passed.
 
-The same checkpoint did not satisfy the predefined internal-retention
-noninferiority criterion:
+The same adapted checkpoint did not satisfy the predefined internal-retention
+criterion:
 
-- G0.01-parent internal-73 mean brain NMAE: `4.4344%`;
-- Lawson fine-tuned mean: `5.0792%`;
+- parent internal mean brain NMAE: `4.4344%`;
+- adapted model: `5.0792%`;
 - paired difference: `+0.6448` percentage points;
 - bootstrap 95% CI: `[+0.6072, +0.6842]`;
 - predefined retention margin: `+0.5` percentage points.
 
-The resulting interpretation is therefore:
+The practical interpretation is therefore:
 
-> Use cohort-specific checkpoints: the Lawson-adapted checkpoint for Lawson
-> data and the original G0.01-parent checkpoint for the original/internal
-> domain.
+> Use G0.01-parent as the general pretrained model. Use the external-adapted
+> checkpoint only when the target domain supports that choice.
 
-## G0.01-Lawson-3e-5 development candidate
+## Model-selection governance
 
-G0.01-Lawson-3e-5 was initialized directly from G0.01-parent and trained for
-100 complete epochs on the 52-subject Lawson training set with constant
-learning rate `3e-5`.
+A locked test cohort used for a final adaptation claim is considered consumed.
+It must not subsequently be reused for hyperparameter selection, checkpoint
+selection, loss-weight tuning, or architecture selection.
 
-It was developed without accessing either the locked Lawson-15 or the
-internal-73 cohort.
-
-On the eight-subject Lawson development-validation cohort, whole-volume
-physical-SUV evaluation showed:
-
-- G0.01-parent brain NMAE: `12.7624%`;
-- G0.01-Lawson-3e-5 brain NMAE: `10.2800%`;
-- paired improvement: `-2.4824` percentage points.
-
-This supports G0.01-Lawson-3e-5 as a promising Lawson development candidate,
-but it does **not** constitute independent confirmation.
-
-## Locked-test governance
-
-The Lawson locked-15 was opened once in the preregistered final evaluation
-(job `591999`).
-
-It is now consumed as an independent test set and must not be reused for:
-
-- learning-rate selection;
-- epoch selection;
-- checkpoint selection;
-- loss-weight selection;
-- L2-SP tuning;
-- architecture selection;
-- comparison of newer development candidates.
-
-In particular:
-
-> **G0.01-Lawson-3e-5 must not be described as independently validated on the
-> Lawson locked-15.**
-
-Any future Lawson-model development requires a new independent confirmation
-cohort if confirmatory claims are desired.
+Future adaptation studies should reserve a new independent test cohort if a new
+confirmatory claim is required.
 
 ## Naming contract
 
-Use these names consistently:
+Use these public names consistently:
 
 - `G0.01-parent`
-- `G0.01-Lawson-15ep-1e-5`
-- `G0.01-Lawson-3e-5`
+- `G0.01-external-adapted`
+- `v0.3.0 epoch-4 historical`
 
-Do not use the historical alias `A` for G0.01-parent in new reports,
-documentation, figures, or released artifacts.
+Do not use historical internal aliases in new public documentation, figures, or
+released artifacts.

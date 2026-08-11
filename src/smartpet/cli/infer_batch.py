@@ -12,11 +12,23 @@ from smartpet.inference.engine import InferenceEngine
 REQUIRED_COLUMNS = ("subject_id", "input_path", "normalized_output", "suv_output")
 
 
-def _optional_path(value: object) -> Path | None:
+def _resolve_manifest_path(value: object, *, manifest_dir: Path) -> Path:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("Manifest path cannot be empty")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = manifest_dir / path
+    return path.resolve()
+
+
+def _optional_path(value: object, *, manifest_dir: Path) -> Path | None:
     if value is None or pd.isna(value):
         return None
     text = str(value).strip()
-    return Path(text) if text else None
+    if not text:
+        return None
+    return _resolve_manifest_path(text, manifest_dir=manifest_dir)
 
 
 def main() -> None:
@@ -36,7 +48,9 @@ def main() -> None:
     p.add_argument("--report-csv")
     args = p.parse_args()
 
-    frame = pd.read_csv(args.manifest)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    manifest_dir = manifest_path.parent
+    frame = pd.read_csv(manifest_path)
     missing = [column for column in REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
         p.error(f"Inference manifest missing columns: {missing}")
@@ -48,7 +62,7 @@ def main() -> None:
     report_path = (
         Path(args.report_csv)
         if args.report_csv
-        else Path(args.manifest).with_name("inference_report.csv")
+        else manifest_path.with_name("inference_report.csv")
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
     engine = InferenceEngine(
@@ -66,9 +80,18 @@ def main() -> None:
     failures = 0
     for index, row in frame.iterrows():
         subject_id = str(row["subject_id"])
-        input_path = Path(str(row["input_path"]))
-        normalized_output = _optional_path(row["normalized_output"])
-        suv_output = _optional_path(row["suv_output"])
+        input_path = _resolve_manifest_path(
+            row["input_path"],
+            manifest_dir=manifest_dir,
+        )
+        normalized_output = _optional_path(
+            row["normalized_output"],
+            manifest_dir=manifest_dir,
+        )
+        suv_output = _optional_path(
+            row["suv_output"],
+            manifest_dir=manifest_dir,
+        )
         if normalized_output is None and suv_output is None:
             raise ValueError(f"{subject_id}: at least one output path is required")
         outputs = [path for path in (normalized_output, suv_output) if path is not None]

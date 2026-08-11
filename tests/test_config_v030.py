@@ -100,9 +100,9 @@ def test_architecture_boolean_fields_reject_integer_aliases(tmp_path):
         load_train_config(path)
 
 
-def test_repository_corrected_s4_profile_loads() -> None:
+def test_repository_phase2b_corrected_s4_candidate_loads() -> None:
     root = Path(__file__).resolve().parents[1]
-    config = load_train_config(root / "configs" / "train_corrected_s4.json")
+    config = load_train_config(root / "configs" / "phase2b_corrected_s4_candidate.json")
     assert config.similarity_mode == "scale_consistent"
     assert config.encoder_convs_per_level == 2
     assert config.channel_spatial_input_projection is True
@@ -112,6 +112,6 @@ def test_repository_corrected_s4_profile_loads() -> None:
 
 def test_maintained_configs_default_to_nondeterministic_runtime() -> None:
     root = Path(__file__).resolve().parents[1]
-    for name in ("train_from_scratch.json", "train_corrected_s4.json", "finetune.json"):
+    for name in ("train_from_scratch.json", "phase2b_corrected_s4_candidate.json", "finetune.json"):
         payload = json.loads((root / "configs" / name).read_text())
         assert payload["deterministic"] is False

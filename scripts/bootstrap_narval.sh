@@ -23,7 +23,14 @@ mkdir -p \
   "$TMPDIR" \
   "$PYTHONPYCACHEPREFIX"
 
-source /home/ray02/pytorch/bin/activate
+if [[ -n "${SMARTPET_VENV_ACTIVATE:-}" ]]; then
+  if [[ ! -f "$SMARTPET_VENV_ACTIVATE" ]]; then
+    echo "[ERROR] SMARTPET_VENV_ACTIVATE does not exist: $SMARTPET_VENV_ACTIVATE" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$SMARTPET_VENV_ACTIVATE"
+fi
 
 python -m pip install -e '.[dev]'
 

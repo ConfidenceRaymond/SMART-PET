@@ -1,0 +1,3 @@
+subject_id,source_image_path,target_image_path,weight_kg,source_net_injected_dose_mbq,target_net_injected_dose_mbq,source_activity_unit,target_activity_unit,source_decay_reference,target_decay_reference,source_count_scaling,target_count_scaling,source_count_fraction,target_count_fraction
+sub-001,/path/to/data/raw/sub-001/lowdose_activity.nii.gz,/path/to/data/raw/sub-001/standarddose_activity.nii.gz,70,300,300,Bq/mL,Bq/mL,ADMIN,ADMIN,quantitative,quantitative,0.1,1.0
+sub-002,/path/to/data/raw/sub-002/lowdose_activity.nii.gz,/path/to/data/raw/sub-002/standarddose_activity.nii.gz,65,280,280,Bq/mL,Bq/mL,ADMIN,ADMIN,quantitative,quantitative,0.1,1.0

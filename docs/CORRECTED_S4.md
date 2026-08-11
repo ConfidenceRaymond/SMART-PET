@@ -1,14 +1,32 @@
 # Corrected configurable S4 architecture
 
-SMART-PET v0.3.1 separates the frozen v0.3.0 architecture from the corrected
-S4 candidate. Architecture choices are explicit configuration fields, recorded
-in full checkpoints and inference-only weights, and checked during resume,
-fine-tuning, export, audit, and inference.
+SMART-PET v0.3.1 makes the S4 architecture choices explicit in configuration,
+full checkpoints, and inference-only weights. These fields are validated during
+resume, fine-tuning, export, audit, and inference.
 
-## Frozen v0.3.0 profile
+## Released G0.01-parent architecture
 
-`configs/train_from_scratch.json` preserves the published v0.3.0 release
-contract:
+The current canonical configuration is `configs/train_from_scratch.json`. It
+matches the released G0.01-parent model:
+
+```json
+{
+  "attention_levels": [2, 3],
+  "similarity_mode": "scale_consistent",
+  "encoder_convs_per_level": 2,
+  "channel_spatial_input_projection": true,
+  "generator_spectral_norm": false,
+  "discriminator_spectral_norm": true,
+  "lambda_gan": 0.01
+}
+```
+
+The public fine-tuning configuration uses the same architecture contract and
+initializes both trained networks from the full G0.01-parent checkpoint.
+
+## Historical v0.3.0 compatibility profile
+
+The published v0.3.0 model used:
 
 ```json
 {
@@ -21,39 +39,47 @@ contract:
 }
 ```
 
-These defaults preserve strict loading of the existing epoch-4 generator.
-Legacy format-4 checkpoints and format-1 inference weights that predate these
-fields resolve only to this complete immutable profile. Partially specified
-architecture metadata is rejected.
+This profile remains an immutable compatibility contract for loading historical
+v0.3.0 checkpoints and inference weights. It is not the default v0.3.1
+from-scratch configuration.
 
-## Corrected S4 candidate
+Legacy format-4 checkpoints and format-1 inference weights that predate the
+explicit S4 fields resolve only to this complete historical profile. Partially
+specified architecture metadata is rejected.
 
-`configs/train_corrected_s4.json` defines the primary Phase 2B candidate:
+## Historical Phase 2B candidate
 
-```json
-{
-  "attention_levels": [2, 3],
-  "similarity_mode": "scale_consistent",
-  "encoder_convs_per_level": 2,
-  "channel_spatial_input_projection": true,
-  "generator_spectral_norm": false,
-  "discriminator_spectral_norm": true
-}
+`configs/phase2b_corrected_s4_candidate.json` is retained for development
+provenance. It introduced the corrected S4 architecture before the final
+G0.01-parent training recipe was established.
+
+It is **not** the recommended public training configuration. In particular, its
+optimization settings differ from the released G0.01-parent recipe, including
+a larger adversarial weight and a shorter training schedule.
+
+For new training use:
+
+```bash
+smartpet-train --config configs/train_from_scratch.json
 ```
 
-The corrected candidate retains the modern MNI/SUV/asinh data contract,
-positive softplus residual output, axial scaled dot-product self-attention,
-single branch gating, raw discriminator logits, and the corrected LSGAN plus
-L1 objective.
+For fine-tuning use:
+
+```bash
+smartpet-train \
+  --config configs/finetune.json \
+  --init-checkpoint /path/to/smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+```
 
 ## Similarity modes
 
 `similarity_mode` is one of:
 
-- `v030_luminance`: the exact v0.3.0 local luminance-like gate and state-dict
-  layout. Under strict deterministic execution, its parameter-free `AvgPool3d`
-  smoothing is evaluated by a mathematically equivalent grouped box convolution
-  because CUDA does not provide deterministic `avg_pool3d` backward;
+- `v030_luminance`: the historical v0.3.0 local luminance-like gate and
+  state-dict layout. Under strict deterministic execution, its parameter-free
+  `AvgPool3d` smoothing is evaluated by a mathematically equivalent grouped box
+  convolution because CUDA does not provide deterministic `avg_pool3d`
+  backward;
 - `paper_exact`: the variance-squared Equation 4 as written in the article,
   with `c2 = (0.03 L)^2` derived from each sample/channel dynamic range;
 - `scale_consistent`: a dimensionally consistent SSIM contrast form comparing
@@ -75,21 +101,23 @@ similarity map.
 restores the historical encoder depth while retaining the modern skip topology
 and output contract.
 
-`channel_spatial_input_projection=true` restores the learned `1x1x1` projection
+`channel_spatial_input_projection=true` enables the learned `1x1x1` projection
 of the input feature into the spatial-attention logits.
 
 `discriminator_spectral_norm=true` applies spectral normalization to every
 active discriminator convolution. Generator spectral normalization remains an
-explicit experimental switch and is disabled in the primary corrected profile
-until a controlled stability smoke test supports enabling it.
+explicit switch and is disabled in the released G0.01-parent profile.
 
-Under DDP, discriminator buffer broadcast is enabled when spectral normalization
-is active so the power-iteration buffers remain rank-synchronized across
-checkpoint boundaries.
+Under DDP, discriminator buffer broadcast is enabled when spectral
+normalization is active so the power-iteration buffers remain synchronized
+across ranks and checkpoint boundaries.
 
-## Acceptance boundary
+## Compatibility boundary
 
-Phase 2B changes architecture code and metadata contracts only. It does not
-claim improved image quality. The candidate must first pass CPU unit tests,
-release validation, static conformance reports, and then the predefined short
-E0-E4 experimental ladder before any full Option C training run.
+Architecture compatibility is checked explicitly. SMART-PET rejects
+fine-tuning or exact-resume attempts when the checkpoint architecture does not
+match the requested configuration.
+
+The historical v0.3.0 profile, the historical Phase 2B candidate, and the
+released G0.01-parent recipe should therefore be treated as distinct,
+versioned contracts rather than interchangeable presets.

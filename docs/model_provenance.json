@@ -1,69 +1,85 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "models": {
     "G0.01-parent": {
-      "role": "original_internal_reference",
-      "checkpoint_sha256": "2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee",
-      "confirmatory_status": "reference"
+      "role": "general_pretrained_reference",
+      "full_checkpoint": {
+        "filename": "smartpet_g001_parent_v0.3.1_full_checkpoint.pt",
+        "sha256": "2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee"
+      },
+      "inference_weights": {
+        "filename": "smartpet_g001_parent_v0.3.1.pt",
+        "sha256": "f26b89db433368167bb67242d0ed2e5351651a2155a92f41f6fce991649f91b0"
+      },
+      "architecture": {
+        "base_channels": 32,
+        "attention_levels": [2, 3],
+        "similarity_mode": "scale_consistent",
+        "encoder_convs_per_level": 2,
+        "channel_spatial_input_projection": true,
+        "generator_spectral_norm": false,
+        "discriminator_spectral_norm": true,
+        "output_mode": "positive_softplus_residual"
+      },
+      "training": {
+        "batch_size_per_process": 2,
+        "epochs": 100,
+        "initial_learning_rate": 0.0001,
+        "lambda_l1": 100.0,
+        "lambda_gan": 0.01,
+        "decay_start_epoch": 35
+      },
+      "public_status": "recommended_general_model"
     },
-    "G0.01-Lawson-15ep-1e-5": {
-      "role": "independently_confirmed_lawson_model",
-      "checkpoint_sha256": "17026f7bda6c0023f886a67a88775f6dee8007526f6ab67e7f5f853fc9b30499",
+    "G0.01-external-adapted": {
+      "role": "domain_specific_adapted_model",
       "parent": "G0.01-parent",
+      "source_checkpoint_sha256": "17026f7bda6c0023f886a67a88775f6dee8007526f6ab67e7f5f853fc9b30499",
+      "inference_weights": {
+        "filename": "smartpet_g001_external_adapted_v0.3.1.pt",
+        "sha256": "aecd3b0c15f0b0b90fc6e2142412562ceacc7a5aacd440d37c3476e7dc89b797"
+      },
       "training": {
         "epochs": 15,
-        "initial_learning_rate": 1e-05,
-        "lawson_train_subjects": 52,
-        "lawson_validation_subjects": 8
+        "initial_learning_rate": 0.00001,
+        "lambda_l1": 100.0,
+        "lambda_gan": 0.01,
+        "decay_start_epoch": 5
       },
-      "confirmatory_status": "locked_lawson15_confirmed",
-      "locked_lawson15_evaluated": true,
-      "locked_lawson15": {
+      "independent_external_evaluation": {
         "n": 15,
         "parent_brain_nmae_pct": 13.340733909606934,
-        "finetuned_brain_nmae_pct": 10.834397188822429,
+        "adapted_brain_nmae_pct": 10.834397188822429,
         "paired_delta_pp": -2.506336720784505,
         "bootstrap_ci95_low_pp": -2.9734062178929648,
         "bootstrap_ci95_high_pp": -2.0769851382573448,
-        "finetuned_subject_wins": 15,
-        "exact_sign_flip_p_two_sided": 6.103515625e-05
+        "adapted_subject_wins": 15,
+        "exact_sign_flip_p_two_sided": 0.00006103515625
       },
-      "internal_retention73": {
+      "internal_retention_evaluation": {
         "retained": false,
         "n": 73,
         "parent_brain_nmae_pct": 4.434413145666253,
-        "finetuned_brain_nmae_pct": 5.079207730619875,
+        "adapted_brain_nmae_pct": 5.079207730619875,
         "paired_delta_pp": 0.6447945849536216,
         "bootstrap_ci95_low_pp": 0.6072211503166042,
         "bootstrap_ci95_high_pp": 0.684186485123961,
         "noninferiority_margin_pp": 0.5
-      }
-    },
-    "G0.01-Lawson-3e-5": {
-      "role": "lawson_development_candidate",
-      "checkpoint_sha256": "504e3b4f30f7b25535a22b8d2844a43dcc8895d7201804627404376733e0be22",
-      "parent": "G0.01-parent",
-      "training": {
-        "epochs": 100,
-        "learning_rate": 3e-05,
-        "learning_rate_schedule": "constant",
-        "lawson_train_subjects": 52,
-        "lawson_validation_subjects": 8
       },
-      "confirmatory_status": "development_only",
-      "locked_lawson15_evaluated": false,
-      "lawson_validation8_whole_volume": {
-        "parent_brain_nmae_pct": 12.762364,
-        "finetuned_brain_nmae_pct": 10.279965,
-        "paired_delta_pp": -2.482399
-      }
+      "public_status": "domain_specific_only"
+    },
+    "v0.3.0-epoch4-historical": {
+      "role": "historical_inference_reference",
+      "inference_weights": {
+        "filename": "smartpet_v0.3.0_epoch4_inference.pt"
+      },
+      "public_status": "historical"
     }
   },
   "governance": {
-    "lawson_locked15_opened": true,
-    "lawson_locked15_final_job_id": 591999,
-    "lawson_locked15_reuse_prohibited": true,
-    "confirmed_lawson_model": "G0.01-Lawson-15ep-1e-5",
-    "newer_development_candidate": "G0.01-Lawson-3e-5"
+    "recommended_general_model": "G0.01-parent",
+    "domain_specific_model": "G0.01-external-adapted",
+    "historical_model": "v0.3.0-epoch4-historical",
+    "locked_test_sets_must_not_be_reused_for_model_selection": true
   }
 }

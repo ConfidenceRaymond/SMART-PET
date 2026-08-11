@@ -34,27 +34,32 @@ consecutive skipped batches because sustained overflow indicates divergence.
 
 ## Architecture profiles
 
-The frozen v0.3.0 profile is `configs/train_from_scratch.json`. The corrected
-Phase 2B candidate is `configs/train_corrected_s4.json`. The five S4 architecture
-fields are mandatory in maintained configuration files:
+The canonical v0.3.1 training configuration is
+`configs/train_from_scratch.json`. It matches the released **G0.01-parent**
+architecture and optimization contract, including:
 
-| Field | Frozen v0.3.0 | Corrected candidate |
-|---|---|---|
-| `similarity_mode` | `v030_luminance` | `scale_consistent` |
-| `encoder_convs_per_level` | `1` | `2` |
-| `channel_spatial_input_projection` | `false` | `true` |
-| `generator_spectral_norm` | `false` | `false` |
-| `discriminator_spectral_norm` | `false` | `true` |
+| Field | G0.01-parent |
+|---|---|
+| `similarity_mode` | `scale_consistent` |
+| `encoder_convs_per_level` | `2` |
+| `channel_spatial_input_projection` | `true` |
+| `generator_spectral_norm` | `false` |
+| `discriminator_spectral_norm` | `true` |
+| `lambda_gan` | `0.01` |
 
-Run the corrected candidate with:
+The published v0.3.0 architecture remains supported for strict loading of
+historical checkpoints and inference weights, but it is no longer the default
+from-scratch configuration.
 
-```bash
-smartpet-train --config configs/train_corrected_s4.json --backend single
-```
+`configs/phase2b_corrected_s4_candidate.json` is retained only as a historical
+development configuration from the architecture-correction phase. It uses the
+same corrected S4 architecture family but different optimization settings and
+must not be treated as the released G0.01-parent training recipe.
 
-Do not resume or fine-tune across architecture profiles. Full checkpoints record
-these fields, and SMART-PET rejects mismatches before training continues. See
-`docs/CORRECTED_S4.md` for the operator-level contract.
+Do not resume or fine-tune across incompatible architecture profiles. Full
+checkpoints record the architecture fields, and SMART-PET rejects mismatches
+before training continues. See `docs/CORRECTED_S4.md` for the architecture
+compatibility contract.
 
 ## Exact continuation
 

@@ -1,67 +1,138 @@
 # Reproducibility assets
 
-The controlled SMART-PET v0.3.0 asset folder is currently available to
-authorized reviewers through the private review mirror linked from the README.
-The mirror is temporary and is not the final citable release location.
+SMART-PET model and reference assets are distributed through the public model
+folder linked from the repository README.
 
-## Intended asset contents
+The repository does not automatically download these files.
 
-- `weights/smartpet_v0.3.0_epoch4_inference.pt`
-- `templates/csymT.nii.gz`
-- `templates/MNI152_T1_1mm_brain_mask.nii.gz`
-- `SHA256SUMS.txt`
-- `THIRD_PARTY_NOTICES.txt`
-- asset `README.md`
+## Public model artifacts
 
-## Artifact lifecycle
+### Inference weights
 
-The model file is an inference-only generator artifact. It must be regenerated
-from its full epoch-4 training checkpoint using the version-controlled command:
-
-```bash
-smartpet-export-weights \
-  --checkpoint /trusted/checkpoints/epoch_0004_complete.pt \
-  --output /assets/weights/smartpet_v0.3.0_epoch4_inference.pt \
-  --json-output /assets/weights/smartpet_v0.3.0_epoch4_inference.export.json
+```text
+weights/
+├── smartpet_g001_parent_v0.3.1.pt
+├── smartpet_g001_external_adapted_v0.3.1.pt
+└── smartpet_v0.3.0_epoch4_inference.pt
 ```
 
-Then audit it and record the printed digest in both the archive's
-`SHA256SUMS.txt` and the Git-tracked release manifest:
+`smartpet_g001_parent_v0.3.1.pt` is the recommended general pretrained
+inference model.
+
+`smartpet_g001_external_adapted_v0.3.1.pt` is a domain-specific adapted model.
+It should not be treated as a universal replacement for the parent model.
+
+`smartpet_v0.3.0_epoch4_inference.pt` is retained as a historical v0.3.0
+inference artifact.
+
+The v0.3.1 inference-weight SHA-256 values are:
+
+```text
+smartpet_g001_parent_v0.3.1.pt
+f26b89db433368167bb67242d0ed2e5351651a2155a92f41f6fce991649f91b0
+
+smartpet_g001_external_adapted_v0.3.1.pt
+aecd3b0c15f0b0b90fc6e2142412562ceacc7a5aacd440d37c3476e7dc89b797
+```
+
+Inference weights contain the trained generator and are intended for
+`smartpet-infer` and `smartpet-infer-batch`.
+
+### Fine-tuning checkpoint
+
+```text
+checkpoints/
+└── smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+```
+
+The full parent checkpoint is the supported initialization artifact for
+fine-tuning.
+
+SHA-256:
+
+```text
+2c974d4196e4514e5a0b877923d6b9b0a0c35ad4b447d06cd73d1bbc7abb8dee
+```
+
+It contains both trained networks and the training-checkpoint metadata required
+by the SMART-PET fine-tuning contract.
+
+Inference-only weights cannot be substituted for this full checkpoint.
+
+## Reference resources
+
+The reproducibility folder may also contain the exact MNI reference, fixed
+whole-brain evaluation mask, SHA-256 manifest, and third-party notices used by
+the release.
+
+Use the same MNI reference for preprocessing, training, inference, and
+evaluation.
+
+Third-party template material remains governed by its original licensing and
+is not relicensed as SMART-PET source code.
+
+## Auditing downloaded models
+
+Audit inference-only weights with:
 
 ```bash
 smartpet-audit-weights \
-  --weights /assets/weights/smartpet_v0.3.0_epoch4_inference.pt \
-  --expected-sha256 <SHA256>
+  --weights /path/to/smartpet_g001_parent_v0.3.1.pt \
+  --expected-sha256 f26b89db433368167bb67242d0ed2e5351651a2155a92f41f6fce991649f91b0
 ```
 
-The artifact can be used with `smartpet-infer` and `smartpet-infer-batch`. It is
-not an exact-resume or fine-tuning checkpoint.
-
-The exact `csymT.nii.gz` reference must be supplied to `--mni-reference`. The
-fixed whole-brain mask is used with `smartpet-evaluate`.
+Audit the full fine-tuning checkpoint with:
 
 ```bash
-smartpet-infer \
-  --checkpoint /assets/weights/smartpet_v0.3.0_epoch4_inference.pt \
-  --input /data/lowdose_suv.nii.gz \
-  --input-domain suv \
-  --mni-reference /assets/templates/csymT.nii.gz \
-  --suv-output /outputs/restored_suv.nii.gz
+smartpet-audit-checkpoint \
+  --checkpoint /path/to/smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+```
+
+For a downloaded file, independently checking SHA-256 before use is strongly
+recommended.
+
+## Artifact lifecycle
+
+Inference-only weights are exported from a full SMART-PET training checkpoint
+with:
+
+```bash
+smartpet-export-weights \
+  --checkpoint /trusted/checkpoints/best.pt \
+  --output /assets/weights/model_inference.pt \
+  --json-output /assets/weights/model_inference.export.json
+```
+
+The exported model must then pass `smartpet-audit-weights`.
+
+Full training checkpoints and inference-only weights serve different purposes:
+
+```text
+inference-only weights
+    → smartpet-infer / smartpet-infer-batch
+
+full parent checkpoint
+    → smartpet-train --init-checkpoint
+
+checkpoint produced by the same interrupted run
+    → smartpet-train --resume
 ```
 
 ## Scientific scope
 
-The reported quantitative results come from a 103-subject validation cohort
-used for model selection. They are not independent held-out test results.
+The original SMART-PET paper and the current software release should not be
+treated as identical implementations. The repository documents the software
+changes explicitly in `docs/CHANGES_FROM_PAPER.md`.
 
-## Integrity and licensing
+The external-adapted model is domain specific. The parent model remains the
+recommended general pretrained model.
 
-The authoritative public release must use an immutable citable archive and a
-SHA-256 manifest committed to this repository. The current restricted mirror is
-not sufficient as the final integrity record.
+## Integrity, privacy, and licensing
 
-SMART-PET model weights are licensed under CC BY-NC-SA 4.0. Commercial use is
-prohibited. MNI/FSL template material remains governed by its original
-third-party notices and is not relicensed as SMART-PET source code.
+No patient data are distributed with the public assets.
 
-No patient data are distributed with these assets.
+SMART-PET model artifacts are released under the repository's
+CC BY-NC-SA 4.0 terms. Commercial use is prohibited.
+
+The SHA-256 values distributed with the release are the integrity reference for
+downloaded model files.

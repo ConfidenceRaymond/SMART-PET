@@ -1,0 +1,3 @@
+subject_id,source_image_path,target_image_path
+sub-001,/path/to/data/raw/sub-001/lowdose_mni_suv.nii.gz,/path/to/data/raw/sub-001/standarddose_mni_suv.nii.gz
+sub-002,/path/to/data/raw/sub-002/lowdose_mni_suv.nii.gz,/path/to/data/raw/sub-002/standarddose_mni_suv.nii.gz
