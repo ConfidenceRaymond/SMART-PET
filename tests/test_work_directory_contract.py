@@ -16,7 +16,9 @@ def test_repository_has_dedicated_work_directory_and_scripts_use_it() -> None:
     assert "TMPDIR" in bootstrap
     assert "SMARTPET_ROOT" in launcher
     assert "SLURM_SUBMIT_DIR" in launcher
-    assert 'PYTHONPATH="$ROOT/src"' in launcher
+    assert 'SMARTPET_VENV:-$ROOT/.venv' in launcher
+    assert "unset PYTHONPATH" in launcher
+    assert "unset EBPYTHONPREFIXES" in launcher
     assert "work-dir" in external
 
 
@@ -26,8 +28,11 @@ def test_external_preprocessing_launcher_isolates_pythonpath() -> None:
     ).read_text()
 
     assert 'PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"' not in script
-    assert 'PYTHONPATH="${ROOT}/src"' in script
+    assert 'PYTHONPATH="${ROOT}/src"' not in script
+    assert "unset PYTHONPATH" in script
     assert "PYTHONNOUSERSITE=1" in script
+    assert "unset EBPYTHONPREFIXES" in script
+    assert "smartpet-prepare-external" in script
 
 
 def test_external_preprocessing_launcher_isolates_python_environment() -> None:
@@ -39,5 +44,8 @@ def test_external_preprocessing_launcher_isolates_python_environment() -> None:
     ).read_text()
 
     assert 'PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"' not in script
-    assert 'PYTHONPATH="${ROOT}/src"' in script
+    assert 'PYTHONPATH="${ROOT}/src"' not in script
+    assert "unset PYTHONPATH" in script
     assert "PYTHONNOUSERSITE=1" in script
+    assert "unset EBPYTHONPREFIXES" in script
+    assert "smartpet-prepare-external" in script

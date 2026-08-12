@@ -1,5 +1,7 @@
-# Known-good SMART-PET external preprocessing environment
-# Validated end-to-end on the UCL florbetapir raw_activity example.
+# SMART-PET external preprocessing Python-package constraint profile.
+# Interpreter used in the dedicated validation: Python 3.11.5.
+# ANTs is an external executable dependency and is not installed from this file.
+# PyTorch is platform-specific and is intentionally constrained separately.
 
 numpy==2.2.2
 pandas==2.2.3

@@ -1,31 +1,80 @@
 # Data contract
 
-SMART-PET v0.3.0 expects **preprocessed scalar 3D NIfTI volumes**. Training and validation CSV files contain exactly:
+SMART-PET v0.3.2 model-facing data are **scalar 3D NIfTI volumes** in a common MNI geometry.
+
+Training and validation manifests contain exactly:
 
 ```csv
 subject_id,source_path,target_path
 ```
 
-Subject identifiers are read as opaque strings, so zero padding such as `007`
-is preserved. Whitespace-only cells are rejected. Relative source and target
-paths are resolved against the CSV file's directory rather than the process
-working directory, and source and target must resolve to different files.
+Subject identifiers are opaque strings, so zero padding such as `007` is preserved. Whitespace-only cells are rejected. Relative paths are resolved against the manifest directory. Source and target must resolve to different files.
 
-Source and target volumes must be different files with the same shape, affine, voxel spacing, and canonical orientation as the supplied MNI reference. Model-facing volumes are expected in the non-negative normalized domain:
+## Model-facing image contract
+
+Source and target must be spatially equivalent to the supplied MNI reference after canonical orientation handling:
+
+- scalar 3D NIfTI;
+- identical canonical shape;
+- matching canonical affine within tolerance;
+- matching voxel spacing;
+- finite values;
+- model-facing normalized domain:
 
 ```text
 normalized = asinh(max(SUV, 0) / asinh_scale)
 ```
 
-Use `smartpet-validate-manifest` on both splits before allocating a GPU. Training and validation subject IDs must be patient-disjoint; the CLI validates each manifest internally, while split-level overlap must also be checked during dataset preparation.
+The public MNI reference is:
 
-The repository deliberately excludes patient data, institution-specific manifests, raw-list-mode processing, and registration pipelines.
+```text
+templates/csymT.nii.gz
+SHA-256: d28d312d3c895c226dbd61947b77691c6d850396c035015399bd4cfdeed4c291
+```
+
+SMART-PET canonicalizes valid NIfTI storage orientation to RAS using the image affine. This can convert a physically correct LAS-stored volume to canonical RAS without changing its anatomical location.
+
+**Canonicalization is not registration.** Native-space PET must be registered through the external preprocessing pathway before model use.
+
+## Dynamic PET
+
+Dynamic 4D PET is not accepted directly by training, inference, or external preprocessing. Construct a scientifically justified scalar 3D image first and document the frame-selection/integration procedure, temporal window, and decay assumptions.
+
+Do not represent arbitrary reconstructed-frame selection or image-space noise injection as true event-level count thinning.
+
+## Validation
+
+Run `smartpet-validate-manifest` before allocating a GPU:
+
+```bash
+smartpet-validate-manifest \
+  --manifest data/train.csv \
+  --other-manifest data/validation.csv \
+  --mni-reference resources/templates/csymT.nii.gz
+```
+
+Training and validation must be patient-disjoint.
+
+## External preprocessing
+
+The public repository **does include** an external preprocessing pipeline:
+
+- `raw_activity`: ANTs registration + SUVbw + asinh;
+- `mni_activity`: SUVbw + asinh;
+- `mni_suv`: asinh;
+- `mni_suv_normalized`: validation/staging.
+
+It does not include raw list-mode reconstruction or scanner-specific count calibration. Uncalibrated counts, sinograms, list-mode files, or arbitrary scanner intensities cannot be converted to SUV from weight and injected dose alone.
+
+See [Data preparation](DATA_PREPARATION.md).
 
 ## Reference resources
 
-The exact MNI reference and whole-brain evaluation mask used by the baseline
-are available in the
-[controlled reproducibility asset folder](https://drive.google.com/drive/folders/1XqEI6W30OsrWusMycX0QB8E8DoFURhWh?usp=drive_link).
+The public fixed brain mask is:
 
-These files are third-party template resources. Their original notices and
-SHA-256 hashes accompany the download.
+```text
+templates/MNI152_T1_1mm_brain_mask.nii.gz
+SHA-256: 274b41c4cf787ada4ce683524301ee052d1ef64b208569c05ce7e9c00717404e
+```
+
+Both resources are distributed through the public reproducibility asset folder and are verified by the repository-pinned checksum manifest. See [Public assets and integrity](PUBLIC_ASSETS.md).

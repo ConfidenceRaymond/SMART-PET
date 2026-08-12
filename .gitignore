@@ -27,3 +27,6 @@ checkpoints/
 outputs/
 configs/*.local.json
 configs/*.local.env
+
+# Public reproducibility assets downloaded by smartpet-download-assets
+resources/

@@ -36,7 +36,11 @@ def load_mni_volume(
         raise FileNotFoundError(path)
     image = nib.as_closest_canonical(nib.load(str(path)))
     if len(image.shape) != 3:
-        raise ValueError(f"Expected scalar 3D NIfTI, got shape {image.shape}: {path}")
+        raise ValueError(
+            "Expected scalar 3D NIfTI, got shape "
+            f"{image.shape}: {path}. Dynamic 4D PET is not a model input; "
+            "construct a documented static 3D image before SMART-PET."
+        )
     if tuple(image.shape) != contract.shape:
         raise ValueError(f"MNI shape mismatch for {path}: {image.shape} != {contract.shape}")
     affine = np.asarray(image.affine, dtype=np.float64)

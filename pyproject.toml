@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartpet"
-version = "0.3.1"
+version = "0.3.2"
 description = "Production-grade 3D SMART-PET training, fine-tuning, evaluation, and whole-volume inference"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,8 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "build>=1.2"]
+dev = ["pytest>=8", "ruff>=0.6", "build>=1.2", "setuptools>=69", "wheel"]
 paper-metrics = ["torchvision>=0.17"]
+excel = ["openpyxl>=3.1,<4"]
+assets = ["gdown==6.1.0"]
 
 [project.scripts]
 smartpet-prepare-external = "smartpet.cli.prepare_external:main"
@@ -44,6 +46,7 @@ smartpet-audit-weights = "smartpet.cli.audit_weights:main"
 smartpet-convert-legacy-checkpoint = "smartpet.cli.convert_legacy_checkpoint:main"
 smartpet-audit-inference = "smartpet.cli.audit_inference:main"
 smartpet-conformance = "smartpet.cli.conformance:main"
+smartpet-download-assets = "smartpet.cli.download_assets:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

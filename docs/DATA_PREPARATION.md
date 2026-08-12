@@ -8,22 +8,44 @@ Training and validation consume only:
 subject_id,source_path,target_path
 ```
 
-Dose, body weight, sex, age, scanner, tracer, and timing fields are preprocessing/QC metadata only. They never enter the SMART-PET network.
-
-## Internal ULDP/RECAP data
-
-The bundled internal manifests select D10 as source and D1 as target. The referenced images are already MNI-registered, converted to SUV, count-scale corrected under the ULDP reconstruction convention, and normalized with `asinh(max(SUV,0)/1.0)`. Do not process them again.
+Dose, body weight, sex, age, scanner, tracer, count provenance, and timing fields are preprocessing/QC metadata only. They never enter the SMART-PET network.
 
 ## External input states
 
 | `--input-kind` | Input requirement | Pipeline |
 |---|---|---|
-| `raw_activity` | calibrated activity-concentration NIfTI outside MNI | ANTs registration → SUVbw → asinh |
-| `mni_activity` | calibrated activity-concentration NIfTI in MNI | SUVbw → asinh |
-| `mni_suv` | body-weight SUV NIfTI in MNI | asinh |
-| `mni_suv_normalized` | already asinh-normalized MNI SUV | validate/stage |
+| `raw_activity` | calibrated activity-concentration scalar 3D NIfTI outside MNI | shared target-estimated ANTs registration → SUVbw → asinh |
+| `mni_activity` | calibrated activity-concentration scalar 3D NIfTI in MNI | SUVbw → asinh |
+| `mni_suv` | body-weight SUV scalar 3D NIfTI in MNI | asinh |
+| `mni_suv_normalized` | already asinh-normalized scalar 3D MNI SUV | validate/stage |
 
 Uncalibrated reconstructed counts, sinograms, list-mode files, or arbitrary scanner intensities cannot be converted to SUV from body weight and dose alone.
+
+Dynamic 4D PET must first be converted into a scientifically documented static 3D image. SMART-PET does not choose or combine dynamic frames automatically.
+
+## Metadata files
+
+CSV is supported by the base installation. XLSX/XLSM is supported with:
+
+```bash
+python -m pip install '.[excel]'
+```
+
+Use:
+
+```bash
+smartpet-prepare-external --metadata-file metadata.xlsx ...
+```
+
+The bundled workbook uses `Raw_Activity_Template` as its data sheet, and SMART-PET selects that sheet automatically when present. For another multi-sheet workbook, select the intended sheet explicitly with `--metadata-sheet SHEET_NAME`.
+
+The repository provides:
+
+- `examples/external_activity_metadata_template.xlsx` — spreadsheet template with instructions and validation-oriented columns;
+- `manifests/templates/external_activity_manifest.csv` — full CSV header template;
+- `examples/preprocessing_raw_activity.csv` — compact CSV example.
+
+The spreadsheet's data sheets contain only table rows. Explanatory notes are kept on the Instructions sheet so a normal Excel-to-CSV export cannot create fake subject rows.
 
 ## Body-weight SUV
 
@@ -35,47 +57,71 @@ SUVbw = activity concentration [Bq/mL] × body weight [g]
         effective dose matched to image reference [Bq]
 ```
 
-Body weight and effective dose are required for `raw_activity` and `mni_activity`. Sex and age are optional cohort/QC fields; they are not used in SUVbw. Height and sex would be needed only for alternative normalizations such as lean-body-mass SUV, which this repository does not calculate.
+Body weight and net administered activity are required for `raw_activity` and `mni_activity`. Sex and age are optional cohort/QC fields and are not used in SUVbw.
 
-## External activity CSV
-
-Required activity columns:
+## Required activity columns
 
 | Column | Meaning |
 |---|---|
 | `subject_id` | unique paired study identifier |
 | `source_image_path`, `target_image_path` | absolute paths or paths relative to `--data-root` |
 | `weight_kg` | body weight used for SUVbw |
-| `source_net_injected_dose_mbq`, `target_net_injected_dose_mbq` | net administered activity at injection after residual correction |
+| `source_net_injected_dose_mbq`, `target_net_injected_dose_mbq` | actual net administered activity after residual correction |
 | `source_activity_unit`, `target_activity_unit` | `Bq/mL`, `kBq/mL`, or `MBq/mL` |
-| `source_decay_reference`, `target_decay_reference` | `ADMIN` or `START` |
+| `source_decay_reference`, `target_decay_reference` | `ADMIN`, `START`, or `NONE` |
 | `source_count_scaling`, `target_count_scaling` | `quantitative` or `count_scaled` |
 | `source_count_fraction`, `target_count_fraction` | retained fraction in `(0,1]` |
 
-Optional but required when a decay reference is `START`:
-
-| Column | Meaning |
-|---|---|
-| `source_injection_datetime`, `target_injection_datetime` | ISO-8601 administration timestamps |
-| `source_acquisition_datetime`, `target_acquisition_datetime` | ISO-8601 acquisition-start timestamps |
-| `radionuclide_half_life_seconds` | half-life used to decay activity to acquisition start |
-
-Optional QC columns include `sex` and `age_years`.
-
-See `manifests/templates/external_activity_manifest.csv`, `manifests/examples/external_activity_pairs.csv`, and `manifests/examples/udunna_random_30s_chunks.csv`.
+Use the **actual administered activity** for both source and target when both reconstructions come from the same injection. Do not enter 10% of the injected activity merely because the source is called D10.
 
 ## Decay-reference handling
 
-PET voxel values and injected activity must refer to the same time:
+PET voxel values and the SUV denominator must refer to the same temporal reference.
 
-- `ADMIN`: image values are decay-corrected to administration time. The net injected activity is used directly.
-- `START`: image values are decay-corrected to acquisition start. The pipeline decays the net injected activity from injection time to acquisition start using the supplied half-life.
+### `ADMIN`
 
-The QC report records both `dose_at_image_reference_mbq` and the final `suv_denominator_mbq` for source and target.
+The image is already decay-corrected to administration time. The net injected activity at administration is used directly.
 
-## Count-decimation handling
+No timing fields are required solely for SUV conversion.
 
-Low-count PET can be produced in two materially different ways:
+### `START`
+
+The image is already decay-corrected to acquisition start. SMART-PET decays the administered activity from injection to acquisition start.
+
+Required:
+
+- `source_injection_datetime` / `target_injection_datetime`;
+- `source_acquisition_datetime` / `target_acquisition_datetime`;
+- `radionuclide_half_life_seconds`.
+
+### `NONE`
+
+The calibrated image has **no decay correction** and represents the average physical activity concentration over the image acquisition interval.
+
+SMART-PET first scales the voxel values to administration time using the frame-average radioactive-decay factor, then uses the administration-time injected activity for SUVbw.
+
+Required for each `NONE` image:
+
+- injection datetime;
+- acquisition-start datetime;
+- radionuclide half-life;
+- `source_image_duration_seconds` or `target_image_duration_seconds`.
+
+The mathematical contract for an interval `[t0,t1]` after injection is:
+
+```text
+mean_decay = [exp(-λ t0) - exp(-λ t1)] / [λ (t1 - t0)]
+activity_ADMIN = activity_uncorrected_average / mean_decay
+λ = ln(2) / half_life
+```
+
+`NONE` must only be used when the reconstruction values genuinely represent a calibrated frame-average activity concentration with no decay correction. If scanner/reconstruction scaling is unknown, do not guess.
+
+The preprocessing QC report records the applied activity correction factor and the final SUV denominator.
+
+## Count-scaling handling
+
+Low-count PET can be produced under different reconstruction scaling conventions.
 
 ### Quantitatively calibrated
 
@@ -84,7 +130,7 @@ source_count_scaling = quantitative
 source_count_fraction = 0.10
 ```
 
-The lower-count reconstruction remains in calibrated activity concentration. The full decay-matched administered dose remains the SUV denominator. The fraction is retained for provenance only.
+The lower-count reconstruction remains in calibrated activity concentration. The full decay-matched administered dose remains the SUV denominator. `source_count_fraction` is provenance only.
 
 ### Proportionally count-scaled
 
@@ -93,13 +139,13 @@ source_count_scaling = count_scaled
 source_count_fraction = 0.10
 ```
 
-Voxel values are proportional to retained counts. The pipeline multiplies the decay-matched dose by `0.10` before SUV conversion. This reproduces the historical ULDP D10/D1 convention.
+Voxel values are proportional to retained counts. SMART-PET multiplies the decay-matched dose by the retained fraction before SUV conversion.
 
-Do not choose `count_scaled` solely because an image is called “10%.” Confirm the reconstruction scaling first.
+Do not choose `count_scaled` solely because a file is named “10%”. Confirm reconstruction scaling first.
 
-### Duration-derived count provenance
+## Optional count-protocol provenance
 
-When the source was produced from selected list-mode frames, provide these optional-but-strongly-recommended CSV fields:
+When the source was constructed from selected list-mode intervals, these fields can validate duration-derived fractions:
 
 | Column | Meaning |
 |---|---|
@@ -108,56 +154,61 @@ When the source was produced from selected list-mode frames, provide these optio
 | `source_number_of_chunks` | number of selected chunks |
 | `source_total_duration_seconds` | total retained source duration |
 | `target_total_duration_seconds` | full reference duration |
-| `selection_window_start_minutes` | start of the list-mode selection window after injection |
-| `selection_window_end_minutes` | end of the list-mode selection window after injection |
+| `selection_window_start_minutes` | selection-window start |
+| `selection_window_end_minutes` | selection-window end |
 
-When any duration-provenance field is supplied, the pipeline requires enough information to validate the protocol. It enforces:
+When any of these fields are supplied, the software validates the internally implied duration fraction. These fields describe **count-selection provenance** and are separate from `source_image_duration_seconds` / `target_image_duration_seconds`, which describe the temporal integration interval needed for `decay_reference=NONE`.
 
-```text
-source_chunk_duration_seconds × source_number_of_chunks
-    = source_total_duration_seconds
-
-source_total_duration_seconds / target_total_duration_seconds
-    = source_count_fraction
-
-(selection_window_end_minutes − selection_window_start_minutes) × 60
-    = target_total_duration_seconds
-```
-
-The target defines the full reference duration, so `target_count_fraction` must be `1.0` when these fields are used.
-
-### Udunna 40–60 minute random-chunk protocol
+A 10% example over a 20-minute target window is:
 
 ```text
 4 random noncontiguous chunks × 30 s = 120 s
-full 40–60 min reference             = 20 min = 1,200 s
-retained count fraction              = 120 / 1,200 = 0.10
+full reference window                 = 1,200 s
+retained fraction                     = 0.10
 ```
 
-Use the same actual net injected activity for source and target. Do not enter 10% of the administered activity as the source injected dose. The software derives the fractional SUV denominator from `source_count_fraction` only when `source_count_scaling=count_scaled`.
-
-Example fields:
+Example CSV fields:
 
 ```csv
 source_count_scaling,target_count_scaling,source_count_fraction,target_count_fraction,source_sampling_scheme,source_chunk_duration_seconds,source_number_of_chunks,source_total_duration_seconds,target_total_duration_seconds,selection_window_start_minutes,selection_window_end_minutes
 count_scaled,quantitative,0.10,1.0,random_noncontiguous,30,4,120,1200,40,60
 ```
 
-Other valid examples for the same 1,200-second reference:
+## Paired native-space registration
 
-| Selection | Source duration | Fraction |
-|---|---:|---:|
-| `4 × 30 s` | 120 s | 0.100 |
-| `3 × 30 s` | 90 s | 0.075 |
-| `2 × 30 s` | 60 s | 0.050 |
+For `raw_activity`, source and target must have identical native shape and physical-space affine and both must be scalar 3D images.
 
-See `COUNT_DECIMATION_POLICY.md` for the full decision policy and quantitative-versus-count-scaled checks.
+SMART-PET estimates **one** target-to-MNI transform from the higher-SNR target and applies the same forward transform stack to both target and source. The source never estimates an independent nonlinear warp.
+
+The default `--transform-type s` means **SyN**. Registration provenance records both the ANTs code and a human-readable transform label.
+
+Required external commands:
+
+```text
+antsRegistrationSyNQuick.sh
+antsApplyTransforms
+```
+
+Alliance/Narval:
+
+```bash
+module load ants/2.6.5
+```
+
+Other systems should follow the official ANTsX installation instructions. See [External preprocessing environment](PREPROCESSING_ENVIRONMENT.md).
+
+## NIfTI orientation and canonical MNI geometry
+
+SMART-PET uses canonical RAS internally. The MNI reference does not need to be stored as RAS on disk. For example, public `csymT.nii.gz` is stored as LAS; SMART-PET reorients voxel data and affine together to canonical RAS.
+
+Geometry checks are made against the canonicalized MNI reference. Do not edit only NIfTI headers to force an orientation label.
 
 ## Outputs
 
 ```text
 prepared_dataset/
   mni/source/ and mni/target/
+  mni/registration/<subject>_shared_transform.json
   suv/source/ and suv/target/
   normalized/source/ and normalized/target/
   manifests/pairs_normalized.csv
@@ -166,73 +217,4 @@ prepared_dataset/
   work/
 ```
 
-The final model-facing CSV contains only `subject_id,source_path,target_path`.
-
-## Work directory
-
-All registration transforms and temporary files are created below the selected `work/` directory. Successful runs delete their timestamped run workspace by default; failed runs retain it for diagnosis. Use `--keep-work` to retain successful intermediates deliberately.
-
-
-## NIfTI orientation and MNI geometry
-
-SMART-PET uses a canonical RAS internal NIfTI representation.
-
-The supplied MNI reference does not need to be stored as RAS on disk.
-For example, an MNI reference may be stored in LAS orientation. SMART-PET
-canonicalizes the reference and every validated MNI-space PET volume using
-NiBabel's orientation-aware canonicalization before training, inference, or
-downstream preprocessing.
-
-Consequently:
-
-- registration software may write an MNI-aligned image using the original
-  reference's storage orientation;
-- SMART-PET subsequently canonicalizes that image to RAS;
-- SUV and normalized PET outputs produced by SMART-PET are stored using the
-  canonical RAS geometry;
-- voxel data are reoriented together with the affine; changing only a NIfTI
-  header is not permitted.
-
-Geometry comparisons for SMART-PET inputs must therefore be made against the
-canonicalized MNI reference rather than against the raw on-disk affine of a
-non-canonical reference.
-
-The required contract is spatial equivalence after canonicalization, not
-byte-for-byte equality with the original reference header.
-
-
-## Paired PET registration contract
-
-For `raw_activity` inputs, SMART-PET treats the low-count source and
-full-count target as a spatially paired PET acquisition.
-
-The source and target must therefore have the same native NIfTI geometry
-before MNI registration:
-
-- identical voxel-grid shape;
-- matching physical-space affine within numerical tolerance.
-
-SMART-PET estimates **one** subject-to-MNI transform from the higher-SNR
-full-count target image. That same forward transform stack is then applied
-to both the target and low-count source.
-
-The low-count source does not estimate an independent nonlinear transform.
-This preserves source-target voxel correspondence and prevents differential
-registration deformation from being introduced into a supervised training
-pair.
-
-For raw-activity preprocessing, a registration provenance JSON is written
-for each subject. It records:
-
-- `registration_driver = target`;
-- `strategy = target_estimated_shared_transform`;
-- transform type;
-- interpolation;
-- native-pair geometry validation;
-- forward transform filenames.
-
-Existing raw-activity MNI outputs that do not contain this shared-transform
-provenance contract are not silently reused. Regeneration requires `--force`.
-
-Inputs already supplied in an MNI input domain (`mni_activity`, `mni_suv`,
-or `mni_suv_normalized`) are not spatially re-registered by this pathway.
+Successful timestamped workspaces are removed by default. Failed runs retain their workspace for diagnosis. Use `--keep-work` to retain successful intermediates deliberately.

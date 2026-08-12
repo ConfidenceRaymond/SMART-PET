@@ -29,6 +29,11 @@ ACTIVITY_REQUIRED_COLUMNS = (
     "target_count_fraction",
 )
 
+IMAGE_TIMING_COLUMNS = (
+    "source_image_duration_seconds",
+    "target_image_duration_seconds",
+)
+
 COUNT_PROTOCOL_COLUMNS = (
     "source_sampling_scheme",
     "source_chunk_duration_seconds",
@@ -45,7 +50,7 @@ _ACTIVITY_FACTORS = {
     "mbq/ml": 1_000_000.0,
 }
 
-_DECAY_REFERENCES = {"ADMIN", "START"}
+_DECAY_REFERENCES = {"ADMIN", "START", "NONE"}
 _COUNT_SCALING_MODES = {"quantitative", "count_scaled"}
 _SAMPLING_SCHEMES = {
     "random_noncontiguous",
@@ -82,7 +87,7 @@ def normalize_decay_reference(value: str) -> str:
     reference = str(value).strip().upper()
     if reference not in _DECAY_REFERENCES:
         raise ValueError(
-            f"Unsupported decay reference {value!r}; use ADMIN or START"
+            f"Unsupported decay reference {value!r}; use ADMIN, START, or NONE"
         )
     return reference
 
@@ -187,6 +192,8 @@ class ExternalPairRecord:
     source_acquisition_datetime: datetime | None = None
     target_acquisition_datetime: datetime | None = None
     radionuclide_half_life_seconds: float | None = None
+    source_image_duration_seconds: float | None = None
+    target_image_duration_seconds: float | None = None
     source_count_scaling: str | None = None
     target_count_scaling: str | None = None
     source_count_fraction: float | None = None
@@ -426,6 +433,24 @@ def _validate_activity_metadata(
         subject_id=subject_id,
     )
 
+    source_image_duration = _optional_float(
+        _get(row, "source_image_duration_seconds"),
+        name="source_image_duration_seconds",
+        subject_id=subject_id,
+    )
+    target_image_duration = _optional_float(
+        _get(row, "target_image_duration_seconds"),
+        name="target_image_duration_seconds",
+        subject_id=subject_id,
+    )
+
+    for name, value in (
+        ("source_image_duration_seconds", source_image_duration),
+        ("target_image_duration_seconds", target_image_duration),
+    ):
+        if value is not None and value <= 0:
+            raise ValueError(f"{name} must be positive for {subject_id}")
+
     if source_decay == "START":
         if source_injection is None or source_acquisition is None or half_life is None:
             raise ValueError(
@@ -437,6 +462,30 @@ def _validate_activity_metadata(
             raise ValueError(
                 "target_decay_reference=START requires target_injection_datetime, "
                 f"target_acquisition_datetime, and radionuclide_half_life_seconds for {subject_id}"
+            )
+    if source_decay == "NONE":
+        if (
+            source_injection is None
+            or source_acquisition is None
+            or half_life is None
+            or source_image_duration is None
+        ):
+            raise ValueError(
+                "source_decay_reference=NONE requires source_injection_datetime, "
+                "source_acquisition_datetime, radionuclide_half_life_seconds, and "
+                f"source_image_duration_seconds for {subject_id}"
+            )
+    if target_decay == "NONE":
+        if (
+            target_injection is None
+            or target_acquisition is None
+            or half_life is None
+            or target_image_duration is None
+        ):
+            raise ValueError(
+                "target_decay_reference=NONE requires target_injection_datetime, "
+                "target_acquisition_datetime, radionuclide_half_life_seconds, and "
+                f"target_image_duration_seconds for {subject_id}"
             )
 
     protocol_values = _validate_count_protocol(
@@ -459,6 +508,8 @@ def _validate_activity_metadata(
         "source_acquisition_datetime": source_acquisition,
         "target_acquisition_datetime": target_acquisition,
         "radionuclide_half_life_seconds": half_life,
+        "source_image_duration_seconds": source_image_duration,
+        "target_image_duration_seconds": target_image_duration,
         "source_count_scaling": source_scaling,
         "target_count_scaling": target_scaling,
         "source_count_fraction": source_fraction,
@@ -473,20 +524,72 @@ def read_external_pair_metadata(
     data_root: str | Path | None = None,
     input_kind: str = "raw_activity",
     require_files: bool = True,
+    metadata_sheet: str | int | None = None,
 ) -> list[ExternalPairRecord]:
     csv_path = Path(csv_path)
-    frame = pd.read_csv(csv_path)
     required = list(BASE_REQUIRED_COLUMNS)
     if input_kind in {"raw_activity", "mni_activity"}:
         required.extend(ACTIVITY_REQUIRED_COLUMNS)
+
+    suffix = csv_path.suffix.lower()
+    if suffix == ".csv":
+        if metadata_sheet is not None:
+            raise ValueError("metadata_sheet is only valid for Excel metadata files")
+        frame = pd.read_csv(csv_path)
+    elif suffix in {".xlsx", ".xlsm"}:
+        try:
+            workbook = pd.ExcelFile(csv_path, engine="openpyxl")
+        except ImportError as exc:
+            raise RuntimeError(
+                "Excel metadata requires the optional openpyxl dependency. "
+                "Install SMART-PET with the 'excel' extra, for example: "
+                "python -m pip install '.[excel]'"
+            ) from exc
+
+        if metadata_sheet is not None:
+            try:
+                frame = pd.read_excel(
+                    workbook, sheet_name=metadata_sheet, engine="openpyxl"
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Excel metadata sheet {metadata_sheet!r} was not found in {csv_path}"
+                ) from exc
+        elif "Raw_Activity_Template" in workbook.sheet_names:
+            frame = pd.read_excel(
+                workbook, sheet_name="Raw_Activity_Template", engine="openpyxl"
+            )
+        elif len(workbook.sheet_names) == 1:
+            frame = pd.read_excel(workbook, sheet_name=0, engine="openpyxl")
+        else:
+            candidates: list[str] = []
+            for sheet_name in workbook.sheet_names:
+                header = pd.read_excel(
+                    workbook, sheet_name=sheet_name, engine="openpyxl", nrows=0
+                )
+                if set(required).issubset(header.columns):
+                    candidates.append(sheet_name)
+            if len(candidates) != 1:
+                raise ValueError(
+                    "Could not select an Excel metadata sheet unambiguously. "
+                    f"Candidate sheets containing the required columns: {candidates}. "
+                    "Specify --metadata-sheet (CLI) or metadata_sheet= (Python)."
+                )
+            frame = pd.read_excel(
+                workbook, sheet_name=candidates[0], engine="openpyxl"
+            )
+    else:
+        raise ValueError(
+            f"Unsupported metadata file extension {suffix!r}; use .csv, .xlsx, or .xlsm"
+        )
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(
-            "External preprocessing CSV is missing required columns for "
+            "External preprocessing metadata is missing required columns for "
             f"input_kind={input_kind}: " + ", ".join(missing)
         )
     if frame.empty:
-        raise ValueError("External preprocessing CSV is empty")
+        raise ValueError("External preprocessing metadata is empty")
 
     root = Path(data_root).expanduser().resolve() if data_root else csv_path.parent.resolve()
     records: list[ExternalPairRecord] = []

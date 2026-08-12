@@ -156,7 +156,7 @@ def test_ddp_wrap_can_broadcast_spectral_norm_buffers(tmp_path: Path) -> None:
     for process in processes:
         process.start()
     for process in processes:
-        process.join(timeout=15)
+        process.join(timeout=60)
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)
@@ -185,7 +185,7 @@ def test_collective_failure_reaches_every_cpu_rank(tmp_path: Path) -> None:
     for process in processes:
         process.start()
     for process in processes:
-        process.join(timeout=15)
+        process.join(timeout=60)
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)

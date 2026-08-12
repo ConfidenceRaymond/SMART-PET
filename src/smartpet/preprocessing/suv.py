@@ -8,6 +8,47 @@ import numpy as np
 from .metadata import activity_factor_to_bq_per_ml
 
 
+def uncorrected_frame_to_admin_factor(
+    *,
+    injection_datetime: datetime,
+    acquisition_datetime: datetime,
+    image_duration_seconds: float,
+    radionuclide_half_life_seconds: float,
+) -> float:
+    """Return the factor that maps an uncorrected frame-average image to ADMIN.
+
+    This contract is for calibrated activity-concentration images whose voxel
+    values represent the average physical activity over an acquisition interval
+    and have *not* been decay corrected. ``acquisition_datetime`` is the start
+    of that interval and ``image_duration_seconds`` is its duration.
+
+    If ``A_admin`` is activity at administration and ``A_frame`` is the average
+    uncorrected activity over the image interval, then
+
+    ``A_admin = A_frame * uncorrected_frame_to_admin_factor(...)``.
+    """
+    duration = float(image_duration_seconds)
+    half_life = float(radionuclide_half_life_seconds)
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("image_duration_seconds must be positive and finite")
+    if not math.isfinite(half_life) or half_life <= 0:
+        raise ValueError("radionuclide_half_life_seconds must be positive and finite")
+
+    elapsed_start = (acquisition_datetime - injection_datetime).total_seconds()
+    if elapsed_start < 0:
+        raise ValueError("acquisition_datetime cannot precede injection_datetime")
+
+    decay_constant = math.log(2.0) / half_life
+    elapsed_end = elapsed_start + duration
+    mean_decay = (
+        math.exp(-decay_constant * elapsed_start)
+        - math.exp(-decay_constant * elapsed_end)
+    ) / (decay_constant * duration)
+    if not math.isfinite(mean_decay) or mean_decay <= 0:
+        raise ValueError("Invalid frame-average decay factor")
+    return float(1.0 / mean_decay)
+
+
 def decay_corrected_dose_mbq(
     *,
     net_injected_dose_mbq: float,
@@ -30,8 +71,13 @@ def decay_corrected_dose_mbq(
     reference = str(decay_reference).strip().upper()
     if reference == "ADMIN":
         return dose
+    if reference == "NONE":
+        raise ValueError(
+            "decay_reference=NONE describes uncorrected voxel activity. "
+            "Correct the activity image to ADMIN before deriving the SUV denominator."
+        )
     if reference != "START":
-        raise ValueError("decay_reference must be ADMIN or START")
+        raise ValueError("decay_reference must be ADMIN, START, or NONE")
     if injection_datetime is None or acquisition_datetime is None:
         raise ValueError("START decay reference requires injection and acquisition datetimes")
     half_life = float(radionuclide_half_life_seconds or 0.0)

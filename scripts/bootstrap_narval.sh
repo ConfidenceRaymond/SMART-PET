@@ -32,7 +32,9 @@ if [[ -n "${SMARTPET_VENV_ACTIVATE:-}" ]]; then
   source "$SMARTPET_VENV_ACTIVATE"
 fi
 
-python -m pip install -e '.[dev]'
+unset EBPYTHONPREFIXES || true
+export PYTHONNOUSERSITE=1
+python -m pip install -e '.[dev,excel]'
 
 PYTHONNOUSERSITE=1 \
 PYTHONPATH="$ROOT/src" \

@@ -16,7 +16,11 @@ from smartpet.data.nifti import MNIContract, load_mni_volume, save_like
 from smartpet.data.normalization import asinh_normalize
 
 from .metadata import ExternalPairRecord, read_external_pair_metadata
-from .suv import effective_suv_denominator_mbq, suv_from_activity_concentration
+from .suv import (
+    effective_suv_denominator_mbq,
+    suv_from_activity_concentration,
+    uncorrected_frame_to_admin_factor,
+)
 
 INPUT_KINDS = ("raw_activity", "mni_activity", "mni_suv", "mni_suv_normalized")
 
@@ -35,6 +39,17 @@ def _assert_same_native_geometry(source: Path, target: Path) -> None:
 
     source_image = nib.load(str(source))
     target_image = nib.load(str(target))
+
+    for label, image, path in (
+        ("source", source_image, source),
+        ("target", target_image, target),
+    ):
+        if len(image.shape) != 3:
+            raise ValueError(
+                "SMART-PET raw_activity preprocessing requires scalar 3D PET. "
+                f"The {label} image is {image.shape}: {path}. Dynamic 4D PET must be "
+                "combined into a documented static 3D image before preprocessing."
+            )
 
     if source_image.shape != target_image.shape:
         raise ValueError(
@@ -247,6 +262,11 @@ def _register_pair(
         "source_output": str(source_destination),
         "target_output": str(target_destination),
         "transform_type": str(transform_type),
+        "transform_type_label": {
+            "s": "SyN",
+            "r": "Rigid",
+            "a": "Affine",
+        }.get(str(transform_type), str(transform_type)),
         "interpolation": "Linear",
         "native_pair_geometry_checked": True,
         "forward_transform_files": [
@@ -312,6 +332,11 @@ def _prepare_one(
             "registration_strategy": "target_estimated_shared_transform",
             "registration_driver": "target",
             "registration_transform_type": str(transform_type),
+            "registration_transform_label": {
+                "s": "SyN",
+                "r": "Rigid",
+                "a": "Affine",
+            }.get(str(transform_type), str(transform_type)),
             "registration_provenance_path": str(
                 paths["registration_json"]
             ),
@@ -335,9 +360,43 @@ def _prepare_one(
     if input_kind in {"raw_activity", "mni_activity"}:
         if record.weight_kg is None:
             raise ValueError(f"Missing weight_kg for activity input: {record.subject_id}")
+
+        source_decay_reference = str(record.source_decay_reference)
+        target_decay_reference = str(record.target_decay_reference)
+
+        source_decay_factor = 1.0
+        target_decay_factor = 1.0
+        if source_decay_reference == "NONE":
+            assert record.source_injection_datetime is not None
+            assert record.source_acquisition_datetime is not None
+            assert record.source_image_duration_seconds is not None
+            assert record.radionuclide_half_life_seconds is not None
+            source_decay_factor = uncorrected_frame_to_admin_factor(
+                injection_datetime=record.source_injection_datetime,
+                acquisition_datetime=record.source_acquisition_datetime,
+                image_duration_seconds=record.source_image_duration_seconds,
+                radionuclide_half_life_seconds=record.radionuclide_half_life_seconds,
+            )
+            source_data = source_data * np.float32(source_decay_factor)
+            source_decay_reference = "ADMIN"
+
+        if target_decay_reference == "NONE":
+            assert record.target_injection_datetime is not None
+            assert record.target_acquisition_datetime is not None
+            assert record.target_image_duration_seconds is not None
+            assert record.radionuclide_half_life_seconds is not None
+            target_decay_factor = uncorrected_frame_to_admin_factor(
+                injection_datetime=record.target_injection_datetime,
+                acquisition_datetime=record.target_acquisition_datetime,
+                image_duration_seconds=record.target_image_duration_seconds,
+                radionuclide_half_life_seconds=record.radionuclide_half_life_seconds,
+            )
+            target_data = target_data * np.float32(target_decay_factor)
+            target_decay_reference = "ADMIN"
+
         source_reference_dose, source_denominator = effective_suv_denominator_mbq(
             net_injected_dose_mbq=float(record.source_net_injected_dose_mbq),
-            decay_reference=str(record.source_decay_reference),
+            decay_reference=source_decay_reference,
             count_scaling=str(record.source_count_scaling),
             count_fraction=float(record.source_count_fraction),
             injection_datetime=record.source_injection_datetime,
@@ -346,7 +405,7 @@ def _prepare_one(
         )
         target_reference_dose, target_denominator = effective_suv_denominator_mbq(
             net_injected_dose_mbq=float(record.target_net_injected_dose_mbq),
-            decay_reference=str(record.target_decay_reference),
+            decay_reference=target_decay_reference,
             count_scaling=str(record.target_count_scaling),
             count_fraction=float(record.target_count_fraction),
             injection_datetime=record.target_injection_datetime,
@@ -370,6 +429,8 @@ def _prepare_one(
             "target_dose_at_image_reference_mbq": target_reference_dose,
             "source_suv_denominator_mbq": source_denominator,
             "target_suv_denominator_mbq": target_denominator,
+            "source_activity_decay_correction_to_admin": source_decay_factor,
+            "target_activity_decay_correction_to_admin": target_decay_factor,
         }
         save_like(source_suv, source_image, paths["source_suv"])
         save_like(target_suv, target_image, paths["target_suv"])
@@ -427,6 +488,7 @@ def run_external_preprocessing(
     *,
     metadata_csv: str | Path,
     data_root: str | Path | None,
+    metadata_sheet: str | int | None = None,
     output_root: str | Path,
     mni_reference: str | Path,
     input_kind: str,
@@ -461,6 +523,7 @@ def run_external_preprocessing(
         data_root=data_root,
         input_kind=input_kind,
         require_files=True,
+        metadata_sheet=metadata_sheet,
     )
     report_rows: list[dict[str, object]] = []
     failed = False

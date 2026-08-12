@@ -2,8 +2,8 @@
   "profile": "smartpet_v0.3.1_g001_parent_from_scratch",
   "train_csv": "examples/train_manifest.csv",
   "val_csv": "examples/validation_manifest.csv",
-  "mni_reference": "/path/to/mni_reference.nii.gz",
-  "out_dir": "/path/to/runs/smartpet_g001_parent_from_scratch",
+  "mni_reference": "resources/templates/csymT.nii.gz",
+  "out_dir": "runs/smartpet_g001_parent_from_scratch",
   "backend": "auto",
   "patch_size": [
     128,

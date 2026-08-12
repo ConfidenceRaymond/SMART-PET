@@ -3,8 +3,8 @@
 ## Validate inputs
 
 ```bash
-smartpet-validate-manifest --manifest train.csv --mni-reference reference.nii.gz
-smartpet-validate-manifest --manifest val.csv --mni-reference reference.nii.gz
+smartpet-validate-manifest --manifest train.csv --mni-reference resources/templates/csymT.nii.gz
+smartpet-validate-manifest --manifest val.csv --mni-reference resources/templates/csymT.nii.gz
 ```
 
 ## Single GPU

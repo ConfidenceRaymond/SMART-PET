@@ -12,6 +12,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e '.[dev]'
-      - run: ruff check .
-      - run: pytest
+      - run: python -m pip install -e '.[dev,excel,assets]'
+      - run: bash scripts/validate_release.sh

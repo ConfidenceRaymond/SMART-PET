@@ -12,9 +12,23 @@ VALIDATION_TMP=$(mktemp -d "${SLURM_TMPDIR:-/tmp}/smartpet-release-validation.XX
 trap 'rm -rf "$VALIDATION_TMP"' EXIT
 export TMPDIR="$VALIDATION_TMP"
 python -m compileall -q src tests
-for script in scripts/*.sh scripts/slurm/*.sh; do bash -n "$script"; done
+while IFS= read -r -d '' script; do
+  bash -n "$script"
+done < <(find scripts -type f -name '*.sh' -print0)
 python - <<'PYCHECK'
-required = ("numpy", "nibabel", "pandas", "torch", "tqdm", "matplotlib", "pytest", "ruff")
+required = (
+    "numpy",
+    "nibabel",
+    "pandas",
+    "torch",
+    "tqdm",
+    "matplotlib",
+    "pytest",
+    "ruff",
+    "openpyxl",
+    "setuptools",
+    "wheel",
+)
 missing = []
 for name in required:
     try:

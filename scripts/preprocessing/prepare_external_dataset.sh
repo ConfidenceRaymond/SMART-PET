@@ -14,7 +14,18 @@ export PYTHONPYCACHEPREFIX="${WORK_ROOT}/cache/pycache"
 
 INPUT_KIND="${SMARTPET_EXTERNAL_INPUT_KIND:-raw_activity}"
 
-PYTHONNOUSERSITE=1 PYTHONPATH="${ROOT}/src" python -m smartpet.cli.prepare_external \
+# Alliance/EasyBuild modules may add site packages through EBPYTHONPREFIXES.
+# ANTs is used as an external executable and does not require those Python paths.
+unset PYTHONPATH || true
+unset EBPYTHONPREFIXES || true
+export PYTHONNOUSERSITE=1
+
+if ! command -v smartpet-prepare-external >/dev/null 2>&1; then
+  echo "[ERROR] smartpet-prepare-external is not on PATH. Activate the SMART-PET environment first." >&2
+  exit 1
+fi
+
+smartpet-prepare-external \
   --metadata-csv "${SMARTPET_EXTERNAL_METADATA_CSV}" \
   --data-root "${SMARTPET_EXTERNAL_DATA_ROOT}" \
   --output-root "${SMARTPET_EXTERNAL_OUTPUT_ROOT}" \

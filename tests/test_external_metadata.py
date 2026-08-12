@@ -5,7 +5,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from smartpet.preprocessing.metadata import read_external_pair_metadata
+from smartpet.preprocessing.metadata import (
+    ACTIVITY_REQUIRED_COLUMNS,
+    BASE_REQUIRED_COLUMNS,
+    IMAGE_TIMING_COLUMNS,
+    read_external_pair_metadata,
+)
 
 
 def _activity_row() -> dict[str, object]:
@@ -105,6 +110,80 @@ def test_start_decay_reference_requires_timing_and_half_life(tmp_path: Path) -> 
         )
 
 
+def test_none_decay_reference_requires_image_duration(tmp_path: Path) -> None:
+    row = _activity_row()
+    row["source_decay_reference"] = "NONE"
+    row["source_image_duration_seconds"] = ""
+    path = tmp_path / "bad_none.csv"
+    pd.DataFrame([row]).to_csv(path, index=False)
+    with pytest.raises(ValueError, match="source_decay_reference=NONE requires"):
+        read_external_pair_metadata(
+            path, input_kind="mni_activity", require_files=False
+        )
+
+
+def test_none_decay_reference_accepts_complete_timing(tmp_path: Path) -> None:
+    row = _activity_row()
+    row["source_decay_reference"] = "NONE"
+    row["source_image_duration_seconds"] = 120
+    path = tmp_path / "none.csv"
+    pd.DataFrame([row]).to_csv(path, index=False)
+    record = read_external_pair_metadata(
+        path, input_kind="mni_activity", require_files=False
+    )[0]
+    assert record.source_decay_reference == "NONE"
+    assert record.source_image_duration_seconds == pytest.approx(120)
+
+
+def test_external_metadata_can_be_read_from_xlsx(tmp_path: Path) -> None:
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "pairs.xlsx"
+    pd.DataFrame([_activity_row()]).to_excel(path, index=False)
+    record = read_external_pair_metadata(
+        path, input_kind="mni_activity", require_files=False
+    )[0]
+    assert record.subject_id == "s1"
+    assert record.source_activity_unit == "kbq/ml"
+
+
+def test_external_metadata_prefers_bundled_template_sheet_name(tmp_path: Path) -> None:
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "template.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        pd.DataFrame({"Instructions": ["Do not parse this sheet"]}).to_excel(
+            writer, sheet_name="Instructions", index=False
+        )
+        pd.DataFrame([_activity_row()]).to_excel(
+            writer, sheet_name="Raw_Activity_Template", index=False
+        )
+        pd.DataFrame([{**_activity_row(), "subject_id": "example"}]).to_excel(
+            writer, sheet_name="Example", index=False
+        )
+    record = read_external_pair_metadata(
+        path, input_kind="mni_activity", require_files=False
+    )[0]
+    assert record.subject_id == "s1"
+
+
+def test_external_metadata_sheet_can_be_selected_explicitly(tmp_path: Path) -> None:
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "multi.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        pd.DataFrame([{**_activity_row(), "subject_id": "first"}]).to_excel(
+            writer, sheet_name="First", index=False
+        )
+        pd.DataFrame([{**_activity_row(), "subject_id": "second"}]).to_excel(
+            writer, sheet_name="Second", index=False
+        )
+    record = read_external_pair_metadata(
+        path,
+        input_kind="mni_activity",
+        require_files=False,
+        metadata_sheet="Second",
+    )[0]
+    assert record.subject_id == "second"
+
+
 def test_count_fraction_must_be_valid(tmp_path: Path) -> None:
     row = _activity_row()
     row["source_count_fraction"] = 0.0
@@ -188,3 +267,30 @@ def test_bundled_udunna_random_chunk_example_is_valid() -> None:
     assert record.source_total_duration_seconds == pytest.approx(120)
     assert record.target_total_duration_seconds == pytest.approx(1200)
     assert record.derived_source_count_fraction == pytest.approx(0.10)
+
+
+def test_bundled_excel_template_has_safe_data_sheets() -> None:
+    pytest.importorskip("openpyxl")
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "external_activity_metadata_template.xlsx"
+    )
+    workbook = pd.ExcelFile(path, engine="openpyxl")
+    assert workbook.sheet_names == [
+        "Instructions",
+        "Raw_Activity_Template",
+        "Example",
+    ]
+
+    template = pd.read_excel(
+        workbook, sheet_name="Raw_Activity_Template", engine="openpyxl"
+    )
+    assert template.empty
+    assert set(BASE_REQUIRED_COLUMNS).issubset(template.columns)
+    assert set(ACTIVITY_REQUIRED_COLUMNS).issubset(template.columns)
+    assert set(IMAGE_TIMING_COLUMNS).issubset(template.columns)
+
+    example = pd.read_excel(workbook, sheet_name="Example", engine="openpyxl")
+    assert len(example) == 1
+    assert example.iloc[0]["subject_id"] == "example-001"

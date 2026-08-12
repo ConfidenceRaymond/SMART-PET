@@ -10,7 +10,11 @@ Fine-tuning starts from the full parent training checkpoint:
 smartpet_g001_parent_v0.3.1_full_checkpoint.pt
 ```
 
-Download it from the SMART-PET model folder linked in the repository README.
+Download it with the verified `finetune` asset profile or from the public asset folder:
+
+```bash
+smartpet-download-assets --profile finetune --output-dir resources
+```
 
 SHA-256:
 
@@ -23,10 +27,10 @@ Run:
 ```bash
 smartpet-train \
   --config configs/finetune.json \
-  --init-checkpoint /path/to/smartpet_g001_parent_v0.3.1_full_checkpoint.pt \
+  --init-checkpoint resources/checkpoints/smartpet_g001_parent_v0.3.1_full_checkpoint.pt \
   --train-csv /path/to/new_train.csv \
   --val-csv /path/to/new_val.csv \
-  --mni-reference /path/to/reference.nii.gz \
+  --mni-reference resources/templates/csymT.nii.gz \
   --out-dir /path/to/new_finetune_run
 ```
 
@@ -44,6 +48,53 @@ The checkpoint architecture must match `base_channels`, `attention_levels`,
 `output_mode`, `asinh_scale`, and all configurable architecture fields. An
 incompatible model or physical-output contract is rejected rather than
 partially loaded.
+
+## Launching fine-tuning
+
+All fine-tuning commands start a new run from the full parent checkpoint.
+Supply your own training and validation manifests and a new output directory.
+
+### Single GPU
+
+```bash
+export SMARTPET_INIT_CHECKPOINT=resources/checkpoints/smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+
+bash scripts/finetune_single_gpu.sh configs/finetune.json \
+  --train-csv /path/to/new_train.csv \
+  --val-csv /path/to/new_val.csv \
+  --mni-reference resources/templates/csymT.nii.gz \
+  --out-dir /path/to/new_finetune_run
+```
+
+### Multi-GPU on one machine
+
+```bash
+export SMARTPET_INIT_CHECKPOINT=resources/checkpoints/smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+export SMARTPET_NPROC_PER_NODE=2
+
+bash scripts/finetune_ddp.sh configs/finetune.json \
+  --train-csv /path/to/new_train.csv \
+  --val-csv /path/to/new_val.csv \
+  --mni-reference resources/templates/csymT.nii.gz \
+  --out-dir /path/to/new_finetune_run
+```
+
+### Alliance Canada / Narval
+
+```bash
+export SMARTPET_INIT_CHECKPOINT=resources/checkpoints/smartpet_g001_parent_v0.3.1_full_checkpoint.pt
+
+sbatch scripts/slurm/narval_finetune_ddp.sh \
+  --train-csv /path/to/new_train.csv \
+  --val-csv /path/to/new_val.csv \
+  --mni-reference resources/templates/csymT.nii.gz \
+  --out-dir /path/to/new_finetune_run
+```
+
+The SLURM wrapper forwards these arguments to the training CLI.
+
+These are fine-tuning operations. Use `--resume` only to continue an
+interrupted run from a checkpoint produced by that same run.
 
 ## Choosing a fine-tuning schedule
 

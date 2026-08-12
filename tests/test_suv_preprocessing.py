@@ -9,6 +9,7 @@ from smartpet.preprocessing.suv import (
     decay_corrected_dose_mbq,
     effective_suv_denominator_mbq,
     suv_from_activity_concentration,
+    uncorrected_frame_to_admin_factor,
 )
 
 
@@ -82,4 +83,24 @@ def test_acquisition_cannot_precede_injection() -> None:
             injection_datetime=injection,
             acquisition_datetime=injection - timedelta(seconds=1),
             radionuclide_half_life_seconds=600,
+        )
+
+
+def test_uncorrected_frame_average_can_be_corrected_to_admin() -> None:
+    injection = datetime(2026, 1, 1, 10, 0, 0)
+    factor = uncorrected_frame_to_admin_factor(
+        injection_datetime=injection,
+        acquisition_datetime=injection,
+        image_duration_seconds=600,
+        radionuclide_half_life_seconds=600,
+    )
+    # Average decay over one half-life is (1 - 0.5) / ln(2).
+    assert factor == pytest.approx(2.0 * np.log(2.0), rel=1e-12)
+
+
+def test_none_decay_reference_is_not_directly_usable_as_dose_reference() -> None:
+    with pytest.raises(ValueError, match="Correct the activity image to ADMIN"):
+        decay_corrected_dose_mbq(
+            net_injected_dose_mbq=200,
+            decay_reference="NONE",
         )
